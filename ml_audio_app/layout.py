@@ -3,8 +3,8 @@ from __future__ import annotations
 from dash import dash_table, dcc, html
 
 from .config import DEFAULT_BAD_HITS, DEFAULT_RECORDING_PREFIX, SECTION_LABELS, SECTION_NAMES
-from .storage import list_audio_files, list_dataset_options, list_group_summary_rows, list_run_artifacts
-from .ui_helpers import build_dataset_banner, build_file_summary_cards, make_columns, message_block
+from .storage import get_latest_run_artifact, list_audio_files, list_dataset_options, list_group_summary_rows, list_run_artifacts
+from .ui_helpers import build_attached_run_status, build_dataset_banner, build_file_summary_cards, make_columns, message_block
 
 
 def studio_tab(default_dataset_slug: str) -> html.Div:
@@ -117,6 +117,8 @@ def studio_tab(default_dataset_slug: str) -> html.Div:
 def file_management_tab(default_dataset_slug: str) -> html.Div:
     rows = list_audio_files(default_dataset_slug)
     group_rows = list_group_summary_rows(default_dataset_slug)
+    latest_run = get_latest_run_artifact(default_dataset_slug)
+    current_run = {"artifact_path": latest_run["value"], "load_mode": "attached_saved"} if latest_run else None
     return html.Div(
         className="tab-content",
         children=[
@@ -132,6 +134,7 @@ def file_management_tab(default_dataset_slug: str) -> html.Div:
                             ),
                         ],
                     ),
+                    html.Div(id="attached-run-status-file", children=build_attached_run_status(default_dataset_slug, current_run)),
                     html.Div(className="dataset-selector-note", children="The active dataset picker in the header controls what you see here."),
                     html.Div(
                         className="upload-row",
@@ -228,7 +231,16 @@ def file_management_tab(default_dataset_slug: str) -> html.Div:
     )
 
 
-def processing_tab() -> html.Div:
+def processing_tab(default_dataset_slug: str) -> html.Div:
+    latest_run = get_latest_run_artifact(default_dataset_slug)
+    default_run_mode = "use_saved" if latest_run else "train_new"
+    default_saved_run = latest_run["value"] if latest_run else None
+    attached_run_note = (
+        "Latest saved run is attached automatically for this dataset. Choose 'Train new models' only when you want to rebuild features and refit classifiers."
+        if latest_run
+        else "No saved run is attached yet for this dataset. Run training once to create a reusable model bundle."
+    )
+
     return html.Div(
         className="tab-content",
         children=[
@@ -255,11 +267,17 @@ def processing_tab() -> html.Div:
                                             {"label": "Train new models", "value": "train_new"},
                                             {"label": "Use an existing saved run", "value": "use_saved"},
                                         ],
-                                        value="train_new",
+                                        value=default_run_mode,
                                         className="inline-options",
                                     ),
                                     html.Label("Saved Run"),
-                                    dcc.Dropdown(id="saved-run-dropdown", options=list_run_artifacts(), placeholder="Select a saved run"),
+                                    dcc.Dropdown(
+                                        id="saved-run-dropdown",
+                                        options=list_run_artifacts(default_dataset_slug),
+                                        value=default_saved_run,
+                                        placeholder="Select a saved run",
+                                    ),
+                                    html.Div(attached_run_note, className="muted-text"),
                                     html.Label("Preprocessing"),
                                     dcc.Checklist(
                                         id="preprocessing-flags",
@@ -334,10 +352,13 @@ def processing_tab() -> html.Div:
     )
 
 
-def results_tab() -> html.Div:
+def results_tab(default_dataset_slug: str) -> html.Div:
+    latest_run = get_latest_run_artifact(default_dataset_slug)
+    current_run = {"artifact_path": latest_run["value"], "load_mode": "attached_saved"} if latest_run else None
     return html.Div(
         className="tab-content",
         children=[
+            html.Div(id="attached-run-status-results", children=build_attached_run_status(default_dataset_slug, current_run)),
             html.Div(id="run-banner-container", children=message_block("Run the pipeline to populate analysis outputs.", "info")),
             html.Div(
                 className="panel",
@@ -425,10 +446,13 @@ def results_tab() -> html.Div:
 
 
 def create_layout(default_dataset_slug: str) -> html.Div:
+    latest_run = get_latest_run_artifact(default_dataset_slug)
+    initial_run_store = {"artifact_path": latest_run["value"], "load_mode": "attached_saved"} if latest_run else None
+
     return html.Div(
         className="app-shell",
         children=[
-            dcc.Store(id="current-run-store"),
+            dcc.Store(id="current-run-store", data=initial_run_store),
             html.Header(
                 className="app-header",
                 children=[
@@ -470,8 +494,8 @@ def create_layout(default_dataset_slug: str) -> html.Div:
                 children=[
                     dcc.Tab(label="Studio", value="studio", children=studio_tab(default_dataset_slug)),
                     dcc.Tab(label="File Management", value="file_management", children=file_management_tab(default_dataset_slug)),
-                    dcc.Tab(label="Processing", value="processing", children=processing_tab()),
-                    dcc.Tab(label="Results / Analysis", value="results", children=results_tab()),
+                    dcc.Tab(label="Processing", value="processing", children=processing_tab(default_dataset_slug)),
+                    dcc.Tab(label="Results / Analysis", value="results", children=results_tab(default_dataset_slug)),
                 ],
             ),
         ],

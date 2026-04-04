@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import subprocess
+from functools import lru_cache
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ import librosa
 import numpy as np
 import pandas as pd
 import soundfile as sf
+from scipy.fft import dct
 from scipy.signal import butter, filtfilt, find_peaks, stft as scipy_stft, welch
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, confusion_matrix
@@ -277,7 +279,7 @@ def load_audio_mono(file_path: Path) -> tuple[np.ndarray, int]:
 
 
 def extract_mfcc_features(y: np.ndarray, sr: int, n_mfcc: int = N_MFCC) -> np.ndarray:
-    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc)
+    mfcc = compute_mfcc(y, sr, n_mfcc=n_mfcc)
     return np.concatenate([mfcc.mean(axis=1), mfcc.std(axis=1)])
 
 
@@ -287,6 +289,66 @@ def extract_psd_features(y: np.ndarray, sr: int, psd_bins: int = PSD_BINS) -> np
     if len(pxx) >= psd_bins:
         return pxx[:psd_bins]
     return np.pad(pxx, (0, psd_bins - len(pxx)), mode="constant")
+
+
+def hz_to_mel(hz: np.ndarray) -> np.ndarray:
+    return 2595.0 * np.log10(1.0 + (hz / 700.0))
+
+
+def mel_to_hz(mel: np.ndarray) -> np.ndarray:
+    return 700.0 * (10 ** (mel / 2595.0) - 1.0)
+
+
+@lru_cache(maxsize=64)
+def mel_filter_bank(sr: int, n_fft: int, n_mels: int) -> np.ndarray:
+    mel_min = hz_to_mel(np.array([0.0]))[0]
+    mel_max = hz_to_mel(np.array([sr / 2.0]))[0]
+    mel_points = np.linspace(mel_min, mel_max, n_mels + 2)
+    hz_points = mel_to_hz(mel_points)
+    bins = np.floor((n_fft + 1) * hz_points / sr).astype(int)
+
+    filterbank = np.zeros((n_mels, (n_fft // 2) + 1), dtype=np.float32)
+    for index in range(1, n_mels + 1):
+        left = bins[index - 1]
+        center = bins[index]
+        right = bins[index + 1]
+
+        if center <= left:
+            center = left + 1
+        if right <= center:
+            right = center + 1
+
+        for i in range(left, min(center, filterbank.shape[1])):
+            filterbank[index - 1, i] = (i - left) / max(center - left, 1)
+        for i in range(center, min(right, filterbank.shape[1])):
+            filterbank[index - 1, i] = (right - i) / max(right - center, 1)
+
+    return filterbank
+
+
+def compute_mfcc(
+    y: np.ndarray,
+    sr: int,
+    n_mfcc: int = N_MFCC,
+    n_mels: int = 32,
+    n_fft: int = 512,
+    hop_length: int = 256,
+) -> np.ndarray:
+    n_fft = min(n_fft, max(64, int(2 ** np.floor(np.log2(max(len(y), 64))))))
+    hop_length = min(hop_length, max(32, n_fft // 2))
+    _, _, zxx = scipy_stft(
+        y.astype(np.float32),
+        fs=sr,
+        nperseg=n_fft,
+        noverlap=max(0, n_fft - hop_length),
+        boundary=None,
+    )
+    power_spec = np.abs(zxx) ** 2
+    filters = mel_filter_bank(sr, n_fft, n_mels)
+    mel_spec = np.dot(filters, power_spec)
+    log_mel = np.log(np.maximum(mel_spec, 1e-10))
+    coeffs = dct(log_mel, type=2, axis=0, norm="ortho")[:n_mfcc]
+    return coeffs.astype(np.float32)
 
 
 def build_feature_matrix(clips: list[tuple[np.ndarray, int]], feature_name: str) -> np.ndarray:

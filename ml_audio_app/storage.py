@@ -451,18 +451,44 @@ def load_run_artifact(run_path: str | Path) -> dict:
     return joblib.load(Path(run_path))
 
 
-def list_run_artifacts() -> list[dict[str, str]]:
+def _run_artifact_record(path: Path) -> dict[str, str] | None:
+    modified = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+    label = path.stem
+    dataset_slug = ""
+    try:
+        bundle = load_run_artifact(path)
+        dataset_label = bundle.get("dataset_label")
+        dataset_slug = str(bundle.get("dataset_slug", "") or "")
+        if dataset_label:
+            label = f"{path.stem} | {dataset_label}"
+    except Exception:
+        pass
+
+    return {
+        "label": f"{label} ({modified})",
+        "value": str(path),
+        "dataset_slug": dataset_slug,
+    }
+
+
+def list_run_artifacts(dataset_slug: str | None = None) -> list[dict[str, str]]:
     ensure_app_directories()
     options: list[dict[str, str]] = []
+    normalized_dataset = slugify_dataset_name(dataset_slug) if dataset_slug else None
+
     for path in sorted(RUNS_ROOT.glob("*.joblib"), key=lambda item: item.stat().st_mtime, reverse=True):
-        modified = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-        label = path.stem
-        try:
-            bundle = load_run_artifact(path)
-            dataset_label = bundle.get("dataset_label")
-            if dataset_label:
-                label = f"{path.stem} | {dataset_label}"
-        except Exception:
-            pass
-        options.append({"label": f"{label} ({modified})", "value": str(path)})
+        record = _run_artifact_record(path)
+        if not record:
+            continue
+        if normalized_dataset and record.get("dataset_slug") != normalized_dataset:
+            continue
+        options.append({"label": record["label"], "value": record["value"]})
+
     return options
+
+
+def get_latest_run_artifact(dataset_slug: str | None = None) -> dict[str, str] | None:
+    records = list_run_artifacts(dataset_slug)
+    if not records:
+        return None
+    return records[0]

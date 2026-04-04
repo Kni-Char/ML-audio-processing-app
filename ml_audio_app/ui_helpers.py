@@ -65,7 +65,32 @@ def build_dataset_banner(dataset_slug: str) -> html.Div:
     )
 
 
-def build_run_banner(bundle: dict) -> html.Div:
+def build_attached_run_status(dataset_slug: str, current_run: dict | None = None) -> html.Div:
+    dataset = get_dataset_record(dataset_slug)
+    artifact_path = (current_run or {}).get("artifact_path")
+    run_id = (current_run or {}).get("run_id")
+    load_mode = (current_run or {}).get("load_mode")
+
+    if artifact_path:
+        mode_text = "Attached saved run ready" if load_mode == "attached_saved" else "Latest session run ready"
+        detail_text = run_id or "Saved model bundle selected"
+        tone = "ready"
+    else:
+        mode_text = "No attached run yet"
+        detail_text = "Train once on this dataset to cache a reusable model bundle."
+        tone = "empty"
+
+    return html.Div(
+        className=f"status-badge status-badge-{tone}",
+        children=[
+            html.Div(dataset["label"], className="status-badge-title"),
+            html.Div(mode_text, className="status-badge-mode"),
+            html.Div(detail_text, className="status-badge-meta"),
+        ],
+    )
+
+
+def build_run_banner(bundle: dict, current_run: dict | None = None) -> html.Div:
     results = bundle.get("results_table", [])
     top_row = results[0] if results else None
     top_text = "No model results yet."
@@ -80,13 +105,20 @@ def build_run_banner(bundle: dict) -> html.Div:
         source_text = f" | Evaluated from saved run {bundle['source_run_id']}"
 
     dataset_text = bundle.get("dataset_label") or DEFAULT_DATASET_LABEL
+    load_mode = (current_run or {}).get("load_mode")
+    if load_mode == "attached_saved":
+        mode_text = "Attached Saved Run"
+    elif load_mode == "trained_now":
+        mode_text = "Trained In Session"
+    else:
+        mode_text = bundle.get("mode", "idle").replace("-", " ").title()
 
     return html.Div(
         className="run-banner",
         children=[
             html.Div(f"Current run: {bundle.get('run_id', 'None')}", className="run-banner-title"),
             html.Div(
-                f"{bundle.get('mode', 'idle').replace('-', ' ').title()} | Dataset: {dataset_text}{source_text}",
+                f"{mode_text} | Dataset: {dataset_text}{source_text}",
                 className="run-banner-mode",
             ),
             html.Div(top_text, className="run-banner-meta"),

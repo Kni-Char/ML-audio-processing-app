@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from dash import Input, Output, State, callback_context, no_update
 
 from .config import DEFAULT_RECORDING_PREFIX, SECTION_LABELS
-from .pipeline import build_signal_preview, evaluate_saved_experiment, train_experiment
+from .pipeline import build_signal_preview, train_experiment
 from .plots import (
     make_accuracy_figure,
     make_clip_lengths_figure,
@@ -15,6 +17,7 @@ from .storage import (
     build_recording_name,
     delete_files,
     get_dataset_record,
+    get_latest_run_artifact,
     list_audio_files,
     list_group_summary_rows,
     list_run_artifacts,
@@ -27,6 +30,7 @@ from .storage import (
 )
 from .ui_helpers import (
     build_confusion_grid,
+    build_attached_run_status,
     build_dataset_banner,
     build_file_summary_cards,
     build_run_banner,
@@ -207,14 +211,55 @@ def register_callbacks(app, default_active_dataset: str) -> None:
 
     @app.callback(
         Output("saved-run-dropdown", "options"),
+        Output("saved-run-dropdown", "value"),
+        Output("run-mode", "value"),
+        Input("active-dataset-dropdown", "value"),
+        Input("current-run-store", "data"),
+        State("saved-run-dropdown", "value"),
+    )
+    def refresh_run_options(active_dataset_slug, current_run, current_saved_run):
+        dataset_slug = active_dataset_slug or default_active_dataset
+        options = list_run_artifacts(dataset_slug)
+        option_values = {option["value"] for option in options}
+
+        current_artifact = (current_run or {}).get("artifact_path")
+        if current_artifact in option_values:
+            selected_value = current_artifact
+        elif current_saved_run in option_values:
+            selected_value = current_saved_run
+        else:
+            latest = get_latest_run_artifact(dataset_slug)
+            selected_value = latest["value"] if latest else None
+
+        run_mode = "use_saved" if selected_value else "train_new"
+        return options, selected_value, run_mode
+
+    @app.callback(
+        Output("current-run-store", "data"),
+        Input("active-dataset-dropdown", "value"),
+        prevent_initial_call=True,
+    )
+    def attach_latest_saved_run(active_dataset_slug):
+        dataset_slug = active_dataset_slug or default_active_dataset
+        latest = get_latest_run_artifact(dataset_slug)
+        if latest:
+            return {"artifact_path": latest["value"], "load_mode": "attached_saved"}
+        return None
+
+    @app.callback(
+        Output("attached-run-status-file", "children"),
+        Output("attached-run-status-results", "children"),
+        Input("active-dataset-dropdown", "value"),
         Input("current-run-store", "data"),
     )
-    def refresh_run_options(_current_run):
-        return list_run_artifacts()
+    def update_attached_run_status(active_dataset_slug, current_run):
+        dataset_slug = active_dataset_slug or default_active_dataset
+        status = build_attached_run_status(dataset_slug, current_run)
+        return status, status
 
     @app.callback(
         Output("processing-message", "children"),
-        Output("current-run-store", "data"),
+        Output("current-run-store", "data", allow_duplicate=True),
         Input("run-pipeline-btn", "n_clicks"),
         State("run-mode", "value"),
         State("saved-run-dropdown", "value"),
@@ -258,9 +303,17 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         try:
             if run_mode == "use_saved":
                 if not saved_run_path:
-                    raise ValueError("Choose a saved run before selecting 'Use an existing saved run'.")
-                saved_bundle = load_run_artifact(saved_run_path)
-                bundle = evaluate_saved_experiment(saved_bundle, dataset_slug)
+                    latest = get_latest_run_artifact(dataset_slug)
+                    saved_run_path = latest["value"] if latest else None
+                if not saved_run_path:
+                    raise ValueError("No saved run is attached to this dataset yet. Switch to 'Train new models' once to create one.")
+                bundle = load_run_artifact(saved_run_path)
+                summary = f"Loaded attached saved run {bundle.get('run_id', Path(saved_run_path).stem)} for {dataset_label}."
+                return message_block(summary, "success"), {
+                    "artifact_path": str(saved_run_path),
+                    "run_id": bundle.get("run_id"),
+                    "load_mode": "attached_saved",
+                }
             else:
                 config = build_experiment_config(
                     preprocessing_flags or [],
@@ -279,15 +332,19 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                 )
                 bundle = train_experiment(config, dataset_slug)
 
-            artifact_path = save_run_artifact(bundle)
-            top_row = bundle["results_table"][0] if bundle["results_table"] else None
-            summary = f"Saved run {bundle['run_id']} for {dataset_label} to {artifact_path.name}."
-            if top_row:
-                summary += (
-                    f" Best validation model: {top_row['feature_set']} | {top_row['model']} "
-                    f"({top_row['validation_accuracy']:.4f})."
-                )
-            return message_block(summary, "success"), {"artifact_path": str(artifact_path), "run_id": bundle["run_id"]}
+                artifact_path = save_run_artifact(bundle)
+                top_row = bundle["results_table"][0] if bundle["results_table"] else None
+                summary = f"Saved run {bundle['run_id']} for {dataset_label} to {artifact_path.name}."
+                if top_row:
+                    summary += (
+                        f" Best validation model: {top_row['feature_set']} | {top_row['model']} "
+                        f"({top_row['validation_accuracy']:.4f})."
+                    )
+                return message_block(summary, "success"), {
+                    "artifact_path": str(artifact_path),
+                    "run_id": bundle["run_id"],
+                    "load_mode": "trained_now",
+                }
         except Exception as exc:
             return message_block(str(exc), "danger"), no_update
 
@@ -423,7 +480,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         diagnostics_rows = flatten_diagnostics(bundle)
 
         return (
-            build_run_banner(bundle),
+            build_run_banner(bundle, current_run),
             make_accuracy_figure(results_rows),
             results_rows,
             make_columns(list(results_rows[0].keys()) if results_rows else []),
