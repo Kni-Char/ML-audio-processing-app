@@ -1,0 +1,34 @@
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_ROOT = PROJECT_ROOT / "data"
+ARTIFACTS_ROOT = PROJECT_ROOT / "artifacts"
+RUNS_ROOT = ARTIFACTS_ROOT / "runs"
+PROCESSED_ROOT = ARTIFACTS_ROOT / "processed_hits"
+DATASET_META_FILENAME = "dataset.json"
+
+SECTION_NAMES = ("training", "testing", "validation")
+SECTION_LABELS = {
+    "training": "Training",
+    "testing": "Testing",
+    "validation": "Validation",
+}
+
+DEFAULT_DATASET_SLUG = "workspace"
+DEFAULT_DATASET_LABEL = "Workspace"
+EXAMPLE_DATASET_SLUG = "example-hw3"
+EXAMPLE_DATASET_LABEL = "Example - HW3"
+
+ALLOWED_AUDIO_EXTENSIONS = {
+    ".wav",
+    ".m4a",
+    ".mp3",
+    ".flac",
+    ".ogg",
+    ".webm",
+}
+
+DEFAULT_RECORDING_PREFIX = "S"
+DEFAULT_BAD_HITS = 24
+GOOD_HITS = 10

@@ -1,0 +1,10 @@
+dash>=2.18
+imageio-ffmpeg>=0.5
+joblib>=1.4
+librosa>=0.10
+numpy>=1.26
+pandas>=2.2
+plotly>=5.24
+scikit-learn>=1.5
+scipy>=1.13
+soundfile>=0.12
