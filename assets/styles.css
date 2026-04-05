@@ -184,6 +184,12 @@ label,
   margin-top: 10px;
 }
 
+.file-manager-inline-input {
+  min-width: 240px;
+  max-width: 340px;
+  margin-left: 4px;
+}
+
 .file-manager-dropzone {
   margin-top: 10px;
   padding: 20px 14px;

@@ -169,8 +169,27 @@ def file_management_tab(default_dataset_slug: str) -> html.Div:
                         ],
                     ),
                     dataset_picker_block(default_dataset_slug),
+                    html.Div(
+                        className="file-manager-sidebar-card",
+                        children=[
+                            html.Div("Save current dataset as bundle", className="file-manager-sidebar-title"),
+                            dcc.Input(
+                                id="save-bundle-name",
+                                type="text",
+                                value="",
+                                placeholder="New dataset bundle name",
+                                className="control",
+                            ),
+                            dcc.Textarea(
+                                id="save-bundle-description",
+                                value="",
+                                placeholder="Optional description",
+                                className="control control-textarea",
+                            ),
+                            html.Button("Save Dataset Bundle", id="save-dataset-bundle-btn", n_clicks=0, className="button button-secondary file-manager-create-button"),
+                        ],
+                    ),
                     html.Div(id="attached-run-status-file", children=build_attached_run_status(default_dataset_slug, current_run)),
-                    html.Div(className="dataset-selector-note", children="The active dataset picker here controls what you see in this file manager."),
                     html.Div(id="file-management-message"),
                     html.Div(
                         className="file-manager-shell",
@@ -195,40 +214,6 @@ def file_management_tab(default_dataset_slug: str) -> html.Div:
                                         className="file-manager-sidebar",
                                         children=[
                                             html.Div(id="file-tree-container", children=build_file_tree(folder_records, initial_folder_key)),
-                                            html.Div(
-                                                className="file-manager-sidebar-card",
-                                                children=[
-                                                    html.Div("Create sub-folder in selected location", className="file-manager-sidebar-title"),
-                                                    dcc.Input(
-                                                        id="create-folder-name",
-                                                        type="text",
-                                                        value="",
-                                                        placeholder="New sub-folder name",
-                                                        className="control",
-                                                    ),
-                                                    html.Button("Create Folder", id="create-folder-btn", n_clicks=0, className="button button-primary file-manager-create-button"),
-                                                ],
-                                            ),
-                                            html.Div(
-                                                className="file-manager-sidebar-card",
-                                                children=[
-                                                    html.Div("Save current dataset as bundle", className="file-manager-sidebar-title"),
-                                                    dcc.Input(
-                                                        id="save-bundle-name",
-                                                        type="text",
-                                                        value="",
-                                                        placeholder="New dataset bundle name",
-                                                        className="control",
-                                                    ),
-                                                    dcc.Textarea(
-                                                        id="save-bundle-description",
-                                                        value="",
-                                                        placeholder="Optional description",
-                                                        className="control control-textarea",
-                                                    ),
-                                                    html.Button("Save Dataset Bundle", id="save-dataset-bundle-btn", n_clicks=0, className="button button-secondary file-manager-create-button"),
-                                                ],
-                                            ),
                                         ],
                                     ),
                                     html.Div(
@@ -239,6 +224,14 @@ def file_management_tab(default_dataset_slug: str) -> html.Div:
                                                 children=[
                                                     html.Button("Delete Selected", id="delete-files-btn", n_clicks=0, className="button button-danger"),
                                                     html.Button("Select / Deselect All", id="toggle-select-all-btn", n_clicks=0, className="button button-secondary"),
+                                                    html.Button("Create Sub-Folder", id="create-folder-btn", n_clicks=0, className="button button-primary"),
+                                                    dcc.Input(
+                                                        id="create-folder-name",
+                                                        type="text",
+                                                        value="",
+                                                        placeholder="New sub-folder name",
+                                                        className="control file-manager-inline-input",
+                                                    ),
                                                 ],
                                             ),
                                             dash_table.DataTable(

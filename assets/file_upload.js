@@ -76,6 +76,66 @@
     setDashValue("file-upload-relative-paths", JSON.stringify(relativePaths));
   }
 
+  function readAllEntries(reader) {
+    return new Promise(function (resolve, reject) {
+      const entries = [];
+
+      function readBatch() {
+        reader.readEntries(
+          function (batch) {
+            if (!batch.length) {
+              resolve(entries);
+              return;
+            }
+            entries.push(...batch);
+            readBatch();
+          },
+          function (error) {
+            reject(error);
+          }
+        );
+      }
+
+      readBatch();
+    });
+  }
+
+  function collectDroppedFiles(entry, currentPath) {
+    return new Promise(function (resolve, reject) {
+      if (entry.isFile) {
+        entry.file(
+          function (file) {
+            const relativePath = currentPath ? `${currentPath}/${file.name}` : file.name;
+            resolve([{ file: file, relativePath: relativePath }]);
+          },
+          function (error) {
+            reject(error);
+          }
+        );
+        return;
+      }
+
+      if (!entry.isDirectory) {
+        resolve([]);
+        return;
+      }
+
+      readAllEntries(entry.createReader())
+        .then(function (children) {
+          return Promise.all(
+            children.map(function (child) {
+              const childPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+              return collectDroppedFiles(child, childPath);
+            })
+          );
+        })
+        .then(function (results) {
+          resolve(results.flat());
+        })
+        .catch(reject);
+    });
+  }
+
   function syncFilesToDashInput(files) {
     const input = getUploadInput();
     if (!input || !window.DataTransfer) {
@@ -122,6 +182,69 @@
     openFolderPicker();
   }
 
+  function handleUploadDragOver(event) {
+    if (!isRootMode()) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "copy";
+    }
+  }
+
+  function handleUploadDrop(event) {
+    if (!isRootMode()) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const items = Array.from((event.dataTransfer && event.dataTransfer.items) || []);
+    const entries = items
+      .map(function (item) {
+        return item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+      })
+      .filter(Boolean);
+
+    if (!entries.length) {
+      const fallbackFiles = Array.from((event.dataTransfer && event.dataTransfer.files) || []);
+      const fallbackPaths = fallbackFiles.map(function (file) {
+        return file.webkitRelativePath || file.name;
+      });
+      setDashValue("file-upload-relative-paths", JSON.stringify(fallbackPaths));
+      syncFilesToDashInput(fallbackFiles);
+      return;
+    }
+
+    Promise.all(
+      entries.map(function (entry) {
+        return collectDroppedFiles(entry, "");
+      })
+    )
+      .then(function (results) {
+        const flattened = results.flat();
+        const files = flattened.map(function (record) {
+          return record.file;
+        });
+        const relativePaths = flattened.map(function (record) {
+          return record.relativePath.replace(/^\/+/, "");
+        });
+        setDashValue("file-upload-relative-paths", JSON.stringify(relativePaths));
+        syncFilesToDashInput(files);
+      })
+      .catch(function () {
+        const fallbackFiles = Array.from((event.dataTransfer && event.dataTransfer.files) || []);
+        const fallbackPaths = fallbackFiles.map(function (file) {
+          return file.webkitRelativePath || file.name;
+        });
+        setDashValue("file-upload-relative-paths", JSON.stringify(fallbackPaths));
+        syncFilesToDashInput(fallbackFiles);
+      });
+  }
+
   function attachUploadHelpers() {
     const wrapper = byId("file-upload");
     const input = getUploadInput();
@@ -134,6 +257,8 @@
     if (wrapper.dataset.folderPickerAttached !== "true") {
       wrapper.dataset.folderPickerAttached = "true";
       wrapper.addEventListener("click", handleUploadClick, true);
+      wrapper.addEventListener("dragover", handleUploadDragOver, true);
+      wrapper.addEventListener("drop", handleUploadDrop, true);
     }
 
     if (input.dataset.folderUploadAttached === "true") {
