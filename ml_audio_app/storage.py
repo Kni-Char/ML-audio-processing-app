@@ -294,6 +294,43 @@ def get_dataset_record(dataset_slug: str) -> dict:
     return next(record for record in list_dataset_records() if record["slug"] == dataset_slug)
 
 
+def _deduplicate_dataset_slug(preferred_slug: str) -> str:
+    base_slug = slugify_dataset_name(preferred_slug)
+    candidate = base_slug
+    counter = 2
+    while dataset_root(candidate).exists():
+        candidate = f"{base_slug}-{counter}"
+        counter += 1
+    return candidate
+
+
+def clone_dataset_bundle(
+    source_dataset_slug: str,
+    target_label: str,
+    target_description: str = "",
+) -> dict[str, str]:
+    source_slug = slugify_dataset_name(source_dataset_slug)
+    source_root = dataset_root(source_slug)
+    if not source_root.exists():
+        raise ValueError(f"Source dataset '{source_slug}' does not exist.")
+
+    clean_label = (target_label or "").strip()
+    if not clean_label:
+        raise ValueError("Enter a dataset bundle name before saving.")
+
+    target_slug = _deduplicate_dataset_slug(clean_label)
+    target_root = dataset_root(target_slug)
+    shutil.copytree(source_root, target_root)
+
+    source_meta = read_dataset_metadata(source_slug)
+    ensure_dataset_directories(
+        target_slug,
+        label=clean_label,
+        description=(target_description or "").strip() or source_meta.get("description", ""),
+    )
+    return {"slug": target_slug, "label": clean_label}
+
+
 def make_file_id(dataset_slug: str, section: str, relative_path: str) -> str:
     return f"{slugify_dataset_name(dataset_slug)}|{canonical_source_section(section)}|{sanitize_relative_audio_path(relative_path)}"
 

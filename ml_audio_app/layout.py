@@ -153,6 +153,7 @@ def file_management_tab(default_dataset_slug: str) -> html.Div:
         children=[
             dcc.Store(id="selected-folder-store", data=initial_folder_key),
             dcc.Store(id="file-manager-refresh-token", data=0),
+            dcc.Store(id="dataset-switch-request", data=None),
             dcc.Textarea(id="file-upload-relative-paths", value="", style={"display": "none"}),
             html.Div(id="upload-directory-mode", style={"display": "none"}, children="subfolder"),
             html.Div(
@@ -206,6 +207,26 @@ def file_management_tab(default_dataset_slug: str) -> html.Div:
                                                         className="control",
                                                     ),
                                                     html.Button("Create Folder", id="create-folder-btn", n_clicks=0, className="button button-primary file-manager-create-button"),
+                                                ],
+                                            ),
+                                            html.Div(
+                                                className="file-manager-sidebar-card",
+                                                children=[
+                                                    html.Div("Save current dataset as bundle", className="file-manager-sidebar-title"),
+                                                    dcc.Input(
+                                                        id="save-bundle-name",
+                                                        type="text",
+                                                        value="",
+                                                        placeholder="New dataset bundle name",
+                                                        className="control",
+                                                    ),
+                                                    dcc.Textarea(
+                                                        id="save-bundle-description",
+                                                        value="",
+                                                        placeholder="Optional description",
+                                                        className="control control-textarea",
+                                                    ),
+                                                    html.Button("Save Dataset Bundle", id="save-dataset-bundle-btn", n_clicks=0, className="button button-secondary file-manager-create-button"),
                                                 ],
                                             ),
                                         ],

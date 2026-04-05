@@ -16,12 +16,14 @@ from .plots import (
 )
 from .storage import (
     build_recording_name,
+    clone_dataset_bundle,
     delete_folders,
     create_subfolder,
     delete_files,
     get_dataset_record,
     get_latest_run_artifact,
     list_audio_files,
+    list_dataset_options,
     list_folder_records,
     list_run_artifacts,
     load_run_artifact,
@@ -152,15 +154,21 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         Output("file-manager-refresh-token", "data", allow_duplicate=True),
         Output("create-folder-name", "value"),
         Output("file-upload-relative-paths", "value"),
+        Output("save-bundle-name", "value"),
+        Output("save-bundle-description", "value"),
+        Output("dataset-switch-request", "data"),
         Input("active-dataset-dropdown", "value"),
         Input("file-upload", "contents"),
         Input("refresh-files-btn", "n_clicks"),
         Input("create-folder-btn", "n_clicks"),
         Input("delete-files-btn", "n_clicks"),
+        Input("save-dataset-bundle-btn", "n_clicks"),
         State("file-upload", "filename"),
         State("file-upload-relative-paths", "value"),
         State("selected-folder-store", "data"),
         State("create-folder-name", "value"),
+        State("save-bundle-name", "value"),
+        State("save-bundle-description", "value"),
         State("file-table", "data"),
         State("file-table", "derived_virtual_data"),
         State("file-table", "selected_rows"),
@@ -173,10 +181,13 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         _refresh_clicks,
         _create_folder_clicks,
         _delete_clicks,
+        _save_bundle_clicks,
         upload_filenames,
         upload_relative_paths_raw,
         selected_folder_key,
         create_folder_name,
+        save_bundle_name,
+        save_bundle_description,
         table_data,
         visible_rows,
         selected_rows,
@@ -186,6 +197,9 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         dataset_slug = active_dataset_slug or default_active_dataset
         dataset_label = get_dataset_record(dataset_slug)["label"]
         message = message_block(f"{dataset_label} is ready for uploads and section moves.", "info")
+        dataset_switch_request = no_update
+        save_bundle_name_value = ""
+        save_bundle_description_value = ""
         current_rows = visible_rows or table_data or list_audio_files(dataset_slug)
         selected_rows = selected_rows or []
         selected_file_ids = []
@@ -249,10 +263,16 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                 if not deleted_parts:
                     raise ValueError("Select one or more files or a sub-folder before deleting. Root sections cannot be deleted.")
                 message = message_block(f"Deleted {' and '.join(deleted_parts)} from {dataset_label}.", "success")
+            elif trigger == "save-dataset-bundle-btn":
+                created = clone_dataset_bundle(dataset_slug, save_bundle_name or "", save_bundle_description or "")
+                dataset_switch_request = created["slug"]
+                message = message_block(f"Saved {dataset_label} as new dataset bundle '{created['label']}'.", "success")
             elif trigger == "refresh-files-btn":
                 message = message_block(f"Refreshed {dataset_label}.", "info")
         except Exception as exc:
             message = message_block(str(exc), "danger")
+            save_bundle_name_value = save_bundle_name or ""
+            save_bundle_description_value = save_bundle_description or ""
 
         rows = list_audio_files(dataset_slug)
         return (
@@ -262,7 +282,27 @@ def register_callbacks(app, default_active_dataset: str) -> None:
             int(refresh_token or 0) + 1,
             "",
             "",
+            save_bundle_name_value,
+            save_bundle_description_value,
+            dataset_switch_request,
         )
+
+    @app.callback(
+        Output("active-dataset-dropdown", "options"),
+        Output("active-dataset-dropdown", "value", allow_duplicate=True),
+        Input("dataset-switch-request", "data"),
+        State("active-dataset-dropdown", "value"),
+        prevent_initial_call=True,
+    )
+    def refresh_dataset_options_after_save(dataset_switch_request, current_dataset_slug):
+        options = list_dataset_options()
+        option_values = {option["value"] for option in options}
+        next_value = (
+            dataset_switch_request
+            if dataset_switch_request in option_values
+            else current_dataset_slug if current_dataset_slug in option_values else default_active_dataset
+        )
+        return options, next_value
 
     @app.callback(
         Output("selected-folder-store", "data"),
