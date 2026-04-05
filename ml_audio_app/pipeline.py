@@ -18,14 +18,14 @@ from scipy.fft import dct
 from scipy.signal import butter, filtfilt, find_peaks, stft as scipy_stft, welch
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, confusion_matrix
-from sklearn.model_selection import GridSearchCV, StratifiedKFold
+from sklearn.model_selection import GridSearchCV, StratifiedKFold, train_test_split
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 
-from .config import DEFAULT_BAD_HITS, GOOD_HITS, PROCESSED_ROOT, SECTION_NAMES
+from .config import DEFAULT_BAD_HITS, DEFAULT_TRAIN_RATIO, GOOD_HITS, PROCESSED_ROOT, SECTION_NAMES
 from .storage import get_dataset_label, list_audio_paths, section_dir
 
 
@@ -61,6 +61,7 @@ class SplitConfig:
 class ExperimentConfig:
     preprocessing: PreprocessingConfig = field(default_factory=PreprocessingConfig)
     split: SplitConfig = field(default_factory=SplitConfig)
+    train_ratio: float = DEFAULT_TRAIN_RATIO
     bad_hits: int = DEFAULT_BAD_HITS
     selected_models: list[str] = field(default_factory=lambda: list(MODEL_ORDER))
     selected_feature_sets: list[str] = field(default_factory=lambda: list(FEATURE_SET_ORDER))
@@ -88,6 +89,7 @@ def experiment_config_from_dict(data: dict[str, Any]) -> ExperimentConfig:
     return ExperimentConfig(
         preprocessing=PreprocessingConfig(**data["preprocessing"]),
         split=SplitConfig(**data["split"]),
+        train_ratio=float(data.get("train_ratio", DEFAULT_TRAIN_RATIO)),
         bad_hits=int(data["bad_hits"]),
         selected_models=list(data["selected_models"]),
         selected_feature_sets=list(data["selected_feature_sets"]),
@@ -541,19 +543,96 @@ def process_section_dataset(
     }
 
 
+def _slice_section_dataset(
+    pooled: dict[str, Any],
+    indices: np.ndarray,
+    section_name: str,
+) -> dict[str, Any]:
+    indices = np.array(indices, dtype=int)
+    clips = [pooled["clips"][index] for index in indices]
+    labels = pooled["labels"][indices] if len(indices) else np.array([], dtype=int)
+
+    if pooled["meta_df"].empty or len(indices) == 0:
+        meta_df = _file_rows_to_frame([])
+    else:
+        meta_df = pooled["meta_df"].iloc[indices].copy().reset_index(drop=True)
+        meta_df["section"] = section_name
+
+    diag_rows: list[dict[str, Any]] = []
+    if not meta_df.empty:
+        grouped = (
+            meta_df.groupby(["group", "relative_path", "source_file", "label"], dropna=False)
+            .agg(assigned_hits=("hit_index", "count"))
+            .reset_index()
+        )
+        grouped["status"] = "ok"
+        grouped["split_role"] = section_name
+        grouped["error"] = ""
+        diag_rows = grouped.to_dict("records")
+
+    return {
+        "clips": clips,
+        "labels": labels,
+        "meta_df": meta_df,
+        "diag_df": pd.DataFrame(diag_rows),
+        "summary": {
+            "files": int(meta_df["source_file"].nunique()) if not meta_df.empty else 0,
+            "groups": int(meta_df["group"].nunique()) if not meta_df.empty else 0,
+            "clips": int(len(labels)),
+            "good_clips": int(np.sum(labels == 0)),
+            "bad_clips": int(np.sum(labels == 1)),
+        },
+    }
+
+
+def split_pooled_dataset(pooled: dict[str, Any], train_ratio: float) -> dict[str, dict[str, Any]]:
+    if not 0 < float(train_ratio) < 1:
+        raise ValueError("Training ratio must be between 0 and 1.")
+
+    labels = pooled["labels"]
+    if len(labels) < 2:
+        raise ValueError("The train/test pool needs enough single-hit clips to create both training and testing splits.")
+
+    indices = np.arange(len(labels))
+    train_indices, test_indices = train_test_split(
+        indices,
+        train_size=float(train_ratio),
+        random_state=42,
+        shuffle=True,
+        stratify=labels,
+    )
+
+    return {
+        "training": _slice_section_dataset(pooled, train_indices, "training"),
+        "testing": _slice_section_dataset(pooled, test_indices, "testing"),
+    }
+
+
 def prepare_datasets(config: ExperimentConfig, run_id: str, dataset_slug: str) -> dict[str, Any]:
     processed_root = PROCESSED_ROOT / run_id if config.save_processed_hits else None
     if processed_root is not None:
         processed_root.mkdir(parents=True, exist_ok=True)
 
-    sections: dict[str, dict[str, Any]] = {}
-    for section in SECTION_NAMES:
-        sections[section] = process_section_dataset(section, config, processed_root, dataset_slug)
-        if sections[section]["summary"]["clips"] == 0:
-            raise ValueError(
-                f"The '{section}' section did not produce any single-hit clips. "
-                "Check that files follow the S_1_g / S_1_b naming convention and contain audible impacts."
-            )
+    pooled = process_section_dataset("pooled", config, processed_root, dataset_slug)
+    validation = process_section_dataset("validation", config, processed_root, dataset_slug)
+
+    if pooled["summary"]["clips"] == 0:
+        raise ValueError(
+            "The pooled train/test section did not produce any single-hit clips. "
+            "Check that files follow the S_1_g / S_1_b naming convention and contain audible impacts."
+        )
+    if validation["summary"]["clips"] == 0:
+        raise ValueError(
+            "The validation section did not produce any single-hit clips. "
+            "Check that files follow the S_1_g / S_1_b naming convention and contain audible impacts."
+        )
+
+    derived = split_pooled_dataset(pooled, config.train_ratio)
+    sections: dict[str, dict[str, Any]] = {
+        "training": derived["training"],
+        "testing": derived["testing"],
+        "validation": validation,
+    }
 
     for section in SECTION_NAMES:
         unique_classes = np.unique(sections[section]["labels"])

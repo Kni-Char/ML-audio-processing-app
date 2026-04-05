@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from dash import Input, Output, State, callback_context, no_update
+from dash import ALL, Input, Output, State, callback_context, no_update
 
-from .config import DEFAULT_RECORDING_PREFIX, SECTION_LABELS
+from .config import DEFAULT_RECORDING_PREFIX, DEFAULT_TRAIN_RATIO, SOURCE_SECTION_LABELS
 from .pipeline import build_signal_preview, train_experiment
 from .plots import (
     make_accuracy_figure,
@@ -15,14 +16,13 @@ from .plots import (
 )
 from .storage import (
     build_recording_name,
-    delete_files,
+    create_subfolder,
     get_dataset_record,
     get_latest_run_artifact,
     list_audio_files,
-    list_group_summary_rows,
+    list_folder_records,
     list_run_artifacts,
     load_run_artifact,
-    move_files,
     resolve_audio_path,
     save_recording,
     save_run_artifact,
@@ -31,9 +31,13 @@ from .storage import (
 from .ui_helpers import (
     build_confusion_grid,
     build_attached_run_status,
+    build_browser_rows,
     build_dataset_banner,
     build_file_summary_cards,
+    build_file_tree,
     build_run_banner,
+    list_available_folder_keys,
+    parse_folder_key,
     flatten_diagnostics,
     make_columns,
     make_media_url,
@@ -66,16 +70,15 @@ def register_callbacks(app, default_active_dataset: str) -> None:
             condition=condition or "g",
         )
         dataset_label = get_dataset_record(dataset_slug or default_active_dataset)["label"]
-        section_label = SECTION_LABELS.get(section or "training", "Training")
+        section_label = SOURCE_SECTION_LABELS.get(section or "pooled", "Train/Test Pool")
         group_label = f" / {group}" if group else ""
         return f"Next saved recording: {dataset_label} / {section_label}{group_label} / {name}"
 
     @app.callback(
         Output("studio-message", "children"),
-        Output("file-table", "data", allow_duplicate=True),
         Output("dataset-summary-cards", "children", allow_duplicate=True),
-        Output("group-summary-table", "data", allow_duplicate=True),
         Output("active-dataset-banner", "children", allow_duplicate=True),
+        Output("file-manager-refresh-token", "data", allow_duplicate=True),
         Input("save-recording-btn", "n_clicks"),
         State("recording-data", "value"),
         State("active-dataset-dropdown", "value"),
@@ -84,6 +87,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         State("record-prefix", "value"),
         State("record-sample-number", "value"),
         State("record-condition", "value"),
+        State("file-manager-refresh-token", "data"),
         prevent_initial_call=True,
     )
     def persist_recording(
@@ -95,6 +99,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         prefix: str,
         sample_number: int,
         condition: str,
+        refresh_token,
     ):
         try:
             destination = save_recording(
@@ -108,60 +113,52 @@ def register_callbacks(app, default_active_dataset: str) -> None:
             )
             rows = list_audio_files(dataset_slug)
             return (
-                message_block(f"Saved recording to {get_dataset_record(dataset_slug)['label']} / {SECTION_LABELS[section]} as {destination.name}.", "success"),
-                rows,
+                message_block(f"Saved recording to {get_dataset_record(dataset_slug)['label']} / {SOURCE_SECTION_LABELS[section]} as {destination.name}.", "success"),
                 build_file_summary_cards(rows),
-                list_group_summary_rows(dataset_slug),
                 build_dataset_banner(dataset_slug),
+                int(refresh_token or 0) + 1,
             )
         except Exception as exc:
             rows = list_audio_files(dataset_slug or default_active_dataset)
             active_slug = dataset_slug or default_active_dataset
             return (
                 message_block(str(exc), "danger"),
-                rows,
                 build_file_summary_cards(rows),
-                list_group_summary_rows(active_slug),
                 build_dataset_banner(active_slug),
+                int(refresh_token or 0),
             )
 
     @app.callback(
-        Output("file-table", "data", allow_duplicate=True),
-        Output("file-table", "selected_rows"),
         Output("file-management-message", "children"),
         Output("dataset-summary-cards", "children", allow_duplicate=True),
-        Output("group-summary-table", "data"),
-        Output("group-summary-table", "columns"),
         Output("active-dataset-banner", "children", allow_duplicate=True),
+        Output("file-manager-refresh-token", "data", allow_duplicate=True),
+        Output("create-folder-name", "value"),
         Input("active-dataset-dropdown", "value"),
         Input("file-upload", "contents"),
         Input("refresh-files-btn", "n_clicks"),
-        Input("move-files-btn", "n_clicks"),
-        Input("delete-files-btn", "n_clicks"),
+        Input("create-folder-btn", "n_clicks"),
         State("file-upload", "filename"),
-        State("upload-section", "value"),
-        State("upload-group", "value"),
-        State("move-target-section", "value"),
-        State("move-target-group", "value"),
+        State("selected-folder-store", "data"),
+        State("create-folder-name", "value"),
         State("file-table", "data"),
         State("file-table", "derived_virtual_data"),
         State("file-table", "selected_rows"),
+        State("file-manager-refresh-token", "data"),
         prevent_initial_call=True,
     )
     def handle_file_actions(
         active_dataset_slug,
         upload_contents,
         _refresh_clicks,
-        _move_files,
-        _delete_clicks,
+        _create_folder_clicks,
         upload_filenames,
-        upload_section,
-        upload_group,
-        move_target_section,
-        move_target_group,
+        selected_folder_key,
+        create_folder_name,
         table_data,
         visible_rows,
         selected_rows,
+        refresh_token,
     ):
         trigger = callback_context.triggered[0]["prop_id"].split(".")[0] if callback_context.triggered else None
         dataset_slug = active_dataset_slug or default_active_dataset
@@ -169,30 +166,37 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         message = message_block(f"{dataset_label} is ready for uploads and section moves.", "info")
         current_rows = visible_rows or table_data or list_audio_files(dataset_slug)
         selected_rows = selected_rows or []
-        selected_ids = [current_rows[index]["file_id"] for index in selected_rows if index < len(current_rows)]
+        selected_ids = [
+            current_rows[index].get("file_id")
+            for index in selected_rows
+            if index < len(current_rows) and current_rows[index].get("file_id")
+        ]
 
         try:
             if trigger == "active-dataset-dropdown":
                 message = message_block(f"Showing files from {dataset_label}.", "info")
             if trigger == "file-upload" and upload_contents:
+                upload_section, upload_group = parse_folder_key(selected_folder_key)
+                if not upload_section:
+                    raise ValueError("Select a destination folder in the tree before uploading.")
                 result = save_uploaded_files(upload_contents, upload_filenames, dataset_slug, upload_section, upload_group or "")
                 saved_count = len(result["saved"])
                 skipped_count = len(result["skipped"])
-                message_text = f"Uploaded {saved_count} file(s) to {dataset_label} / {SECTION_LABELS[upload_section]}."
+                message_text = f"Uploaded {saved_count} file(s) to {dataset_label} / {SOURCE_SECTION_LABELS[upload_section]}."
                 if upload_group:
-                    message_text += f" Group: {upload_group}."
+                    message_text += f" Folder: {upload_group}."
                 if skipped_count:
                     message_text += f" Skipped {skipped_count} unsupported file(s)."
                 message = message_block(message_text, "success")
-            elif trigger == "move-files-btn":
-                moved = move_files(selected_ids, move_target_section, move_target_group or "", dataset_slug)
-                move_target = f"{SECTION_LABELS[move_target_section]}"
-                if move_target_group:
-                    move_target += f" / {move_target_group}"
-                message = message_block(f"Moved {len(moved)} file(s) to {dataset_label} / {move_target}.", "success")
-            elif trigger == "delete-files-btn":
-                deleted = delete_files(selected_ids)
-                message = message_block(f"Deleted {len(deleted)} file(s).", "danger")
+            elif trigger == "create-folder-btn":
+                target_section, target_group = parse_folder_key(selected_folder_key)
+                if not target_section:
+                    raise ValueError("Select Train/Test Pool, Validation, or a sub-folder before creating a new folder.")
+                created = create_subfolder(dataset_slug, target_section, target_group or "", create_folder_name or "")
+                parent_label = SOURCE_SECTION_LABELS[target_section]
+                if target_group:
+                    parent_label += f" / {target_group}"
+                message = message_block(f"Created folder '{created.name}' inside {dataset_label} / {parent_label}.", "success")
             elif trigger == "refresh-files-btn":
                 message = message_block(f"Refreshed {dataset_label}.", "info")
         except Exception as exc:
@@ -200,14 +204,91 @@ def register_callbacks(app, default_active_dataset: str) -> None:
 
         rows = list_audio_files(dataset_slug)
         return (
-            rows,
-            [],
             message,
             build_file_summary_cards(rows),
-            list_group_summary_rows(dataset_slug),
-            make_columns(["section", "group", "files", "good_files", "bad_files"]),
             build_dataset_banner(dataset_slug),
+            int(refresh_token or 0) + 1,
+            "",
         )
+
+    @app.callback(
+        Output("selected-folder-store", "data"),
+        Input("active-dataset-dropdown", "value"),
+        Input("file-manager-refresh-token", "data"),
+        Input({"type": "file-tree-node", "key": ALL}, "n_clicks"),
+        State("selected-folder-store", "data"),
+        prevent_initial_call=False,
+    )
+    def sync_selected_folder(active_dataset_slug, _refresh_token, _folder_clicks, current_folder_key):
+        dataset_slug = active_dataset_slug or default_active_dataset
+        folder_records = list_folder_records(dataset_slug)
+        available_keys = list_available_folder_keys(folder_records)
+        if not available_keys:
+            return None
+
+        trigger = callback_context.triggered[0]["prop_id"].split(".")[0] if callback_context.triggered else ""
+        if trigger.startswith("{"):
+            try:
+                clicked = json.loads(trigger)
+                clicked_key = clicked.get("key")
+                if clicked_key in available_keys:
+                    return clicked_key
+            except json.JSONDecodeError:
+                pass
+
+        if current_folder_key in available_keys:
+            return current_folder_key
+        return available_keys[0]
+
+    @app.callback(
+        Output("file-tree-container", "children"),
+        Output("upload-target-note", "children"),
+        Output("file-table", "data"),
+        Output("file-table", "selected_rows"),
+        Input("active-dataset-dropdown", "value"),
+        Input("selected-folder-store", "data"),
+        Input("file-manager-refresh-token", "data"),
+    )
+    def render_file_manager(active_dataset_slug, selected_folder_key, _refresh_token):
+        dataset_slug = active_dataset_slug or default_active_dataset
+        rows = list_audio_files(dataset_slug)
+        folder_records = list_folder_records(dataset_slug)
+        available_keys = list_available_folder_keys(folder_records)
+        effective_folder_key = selected_folder_key if selected_folder_key in available_keys else (available_keys[0] if available_keys else None)
+        upload_section, upload_group = parse_folder_key(effective_folder_key)
+        if upload_section:
+            destination = SOURCE_SECTION_LABELS[upload_section]
+            if upload_group:
+                destination += f" / {upload_group}"
+            upload_note = f"Uploads will go into: {destination}"
+        else:
+            upload_note = "Select a folder in the tree to upload audio."
+        browser_rows = build_browser_rows(rows, folder_records, effective_folder_key)
+        return (
+            build_file_tree(folder_records, effective_folder_key),
+            upload_note,
+            browser_rows,
+            [],
+        )
+
+    @app.callback(
+        Output("selected-folder-store", "data", allow_duplicate=True),
+        Input("file-table", "active_cell"),
+        State("file-table", "data"),
+        State("selected-folder-store", "data"),
+        prevent_initial_call=True,
+    )
+    def navigate_from_file_table(active_cell, table_rows, current_folder_key):
+        if not active_cell or not table_rows:
+            return no_update
+        row_index = active_cell.get("row")
+        if row_index is None or row_index >= len(table_rows):
+            return no_update
+
+        row = table_rows[row_index]
+        if row.get("row_type") in {"folder", "back"} and row.get("nav_key"):
+            return row["nav_key"]
+        return no_update
 
     @app.callback(
         Output("saved-run-dropdown", "options"),
@@ -267,6 +348,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         State("lowcut-hz", "value"),
         State("highcut-hz", "value"),
         State("filter-order", "value"),
+        State("train-ratio", "value"),
         State("pre-sec", "value"),
         State("post-sec", "value"),
         State("min-gap-sec", "value"),
@@ -287,6 +369,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         lowcut_hz,
         highcut_hz,
         filter_order,
+        train_ratio,
         pre_sec,
         post_sec,
         min_gap_sec,
@@ -320,6 +403,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                     lowcut_hz,
                     highcut_hz,
                     filter_order,
+                    train_ratio,
                     pre_sec,
                     post_sec,
                     min_gap_sec,
@@ -334,7 +418,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
 
                 artifact_path = save_run_artifact(bundle)
                 top_row = bundle["results_table"][0] if bundle["results_table"] else None
-                summary = f"Saved run {bundle['run_id']} for {dataset_label} to {artifact_path.name}."
+                summary = f"Saved run {bundle['run_id']} for {dataset_label} to {artifact_path.name} using a pooled {config.train_ratio:.0%}/{1 - config.train_ratio:.0%} train/test split."
                 if top_row:
                     summary += (
                         f" Best validation model: {top_row['feature_set']} | {top_row['model']} "
@@ -351,11 +435,13 @@ def register_callbacks(app, default_active_dataset: str) -> None:
     @app.callback(
         Output("preview-file-dropdown", "options"),
         Output("preview-file-dropdown", "value"),
-        Input("file-table", "data"),
+        Input("active-dataset-dropdown", "value"),
+        Input("file-manager-refresh-token", "data"),
         State("preview-file-dropdown", "value"),
     )
-    def sync_preview_dropdown(rows, current_value):
-        rows = rows or []
+    def sync_preview_dropdown(active_dataset_slug, _refresh_token, current_value):
+        dataset_slug = active_dataset_slug or default_active_dataset
+        rows = list_audio_files(dataset_slug)
         options = [{"label": f"{row['section']} / {row['group']} / {row['name']}", "value": row["file_id"]} for row in rows]
         values = {option["value"] for option in options}
         if current_value in values:
@@ -410,6 +496,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
             lowcut_hz,
             highcut_hz,
             filter_order,
+            DEFAULT_TRAIN_RATIO,
             pre_sec,
             post_sec,
             min_gap_sec,
@@ -424,7 +511,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         try:
             preview = build_signal_preview(file_path, config.preprocessing, config.split, config.bad_hits)
             metadata = (
-                f"{get_dataset_record(dataset_slug)['label']} / {section.title()} / {relative_path} | "
+                f"{get_dataset_record(dataset_slug)['label']} / {SOURCE_SECTION_LABELS.get(section, section.title())} / {relative_path} | "
                 f"Label: {preview['label']} | Expected hits: {preview['expected_hits']} | "
                 f"Found hits: {preview['found_hits']} | Delta used: {preview['delta_used']} | Duration: {preview['duration_sec']}s"
             )

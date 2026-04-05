@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from dash import dash_table, dcc, html
 
-from .config import DEFAULT_BAD_HITS, DEFAULT_RECORDING_PREFIX, SECTION_LABELS, SECTION_NAMES
-from .storage import get_latest_run_artifact, list_audio_files, list_dataset_options, list_group_summary_rows, list_run_artifacts
-from .ui_helpers import build_attached_run_status, build_dataset_banner, build_file_summary_cards, make_columns, message_block
+from .config import DEFAULT_BAD_HITS, DEFAULT_RECORDING_PREFIX, DEFAULT_TRAIN_RATIO, SOURCE_SECTION_LABELS, SOURCE_SECTION_NAMES
+from .storage import get_latest_run_artifact, list_audio_files, list_dataset_options, list_folder_records, list_run_artifacts
+from .ui_helpers import (
+    build_attached_run_status,
+    build_browser_rows,
+    build_dataset_banner,
+    build_file_summary_cards,
+    build_file_tree,
+    list_available_folder_keys,
+    message_block,
+)
 
 
 def studio_tab(default_dataset_slug: str) -> html.Div:
@@ -75,8 +83,8 @@ def studio_tab(default_dataset_slug: str) -> html.Div:
                                     html.Label("Target Section"),
                                     dcc.Dropdown(
                                         id="record-target-section",
-                                        options=[{"label": SECTION_LABELS[key], "value": key} for key in SECTION_NAMES],
-                                        value="training",
+                                        options=[{"label": SOURCE_SECTION_LABELS[key], "value": key} for key in SOURCE_SECTION_NAMES],
+                                        value="pooled",
                                         clearable=False,
                                     ),
                                 ]
@@ -114,14 +122,37 @@ def studio_tab(default_dataset_slug: str) -> html.Div:
     )
 
 
+def dataset_picker_block(default_dataset_slug: str) -> html.Div:
+    return html.Div(
+        className="dataset-picker",
+        children=[
+            html.Label("Active Dataset Bundle"),
+            dcc.Dropdown(
+                id="active-dataset-dropdown",
+                options=list_dataset_options(),
+                value=default_dataset_slug,
+                clearable=False,
+            ),
+            html.Div(
+                "Switch datasets here to browse, process, and demo different collections.",
+                className="muted-text",
+            ),
+        ],
+    )
+
+
 def file_management_tab(default_dataset_slug: str) -> html.Div:
     rows = list_audio_files(default_dataset_slug)
-    group_rows = list_group_summary_rows(default_dataset_slug)
+    folder_records = list_folder_records(default_dataset_slug)
     latest_run = get_latest_run_artifact(default_dataset_slug)
     current_run = {"artifact_path": latest_run["value"], "load_mode": "attached_saved"} if latest_run else None
+    initial_folder_key = list_available_folder_keys(folder_records)[0] if folder_records else None
+    initial_browser_rows = build_browser_rows(rows, folder_records, initial_folder_key)
     return html.Div(
         className="tab-content",
         children=[
+            dcc.Store(id="selected-folder-store", data=initial_folder_key),
+            dcc.Store(id="file-manager-refresh-token", data=0),
             html.Div(
                 className="panel",
                 children=[
@@ -130,100 +161,103 @@ def file_management_tab(default_dataset_slug: str) -> html.Div:
                         children=[
                             html.H2("File Management"),
                             html.P(
-                                "Work with dataset bundles that contain training, testing, and validation sections plus nested folders like Set1-Set5 or independent capture days."
+                                "Store train/test audio together in one pooled section, keep independent validation separate, and let the processing tab split the pool at runtime."
                             ),
                         ],
                     ),
+                    dataset_picker_block(default_dataset_slug),
                     html.Div(id="attached-run-status-file", children=build_attached_run_status(default_dataset_slug, current_run)),
-                    html.Div(className="dataset-selector-note", children="The active dataset picker in the header controls what you see here."),
+                    html.Div(className="dataset-selector-note", children="The active dataset picker here controls what you see in this file manager."),
+                    html.Div(id="file-management-message"),
                     html.Div(
-                        className="upload-row",
+                        className="file-manager-shell",
                         children=[
                             html.Div(
-                                className="upload-card",
+                                className="file-manager-toolbar",
                                 children=[
-                                    html.Label("Upload Destination Section"),
-                                    dcc.Dropdown(
-                                        id="upload-section",
-                                        options=[{"label": SECTION_LABELS[key], "value": key} for key in SECTION_NAMES],
-                                        value="training",
-                                        clearable=False,
+                                    html.Div(
+                                        className="file-manager-toolbar-copy",
+                                        children=[
+                                            html.Div("Files", className="file-manager-toolbar-title"),
+                                            html.Div("Browse folders on the left and manage files in the selected location.", className="muted-text"),
+                                        ],
                                     ),
-                                    html.Label("Group / Subfolder"),
-                                    dcc.Input(
-                                        id="upload-group",
-                                        type="text",
-                                        value="",
-                                        placeholder="Examples: Set6, Day2, BatchA/Retest",
-                                        className="control",
-                                    ),
-                                    dcc.Upload(
-                                        id="file-upload",
-                                        multiple=True,
-                                        className="upload-dropzone",
-                                        children=html.Div(
-                                            [
-                                                html.Span("Drag and drop audio files here"),
-                                                html.Br(),
-                                                html.Small("or click to browse"),
-                                            ]
-                                        ),
-                                    ),
+                                    html.Button("Refresh", id="refresh-files-btn", n_clicks=0, className="button button-secondary file-manager-toolbar-button"),
                                 ],
                             ),
                             html.Div(
-                                className="action-card",
+                                className="file-manager-workspace",
                                 children=[
-                                    html.Label("Selected File Actions"),
-                                    dcc.Dropdown(
-                                        id="move-target-section",
-                                        options=[{"label": SECTION_LABELS[key], "value": key} for key in SECTION_NAMES],
-                                        value="testing",
-                                        clearable=False,
-                                    ),
-                                    html.Label("Move Into Group / Folder"),
-                                    dcc.Input(
-                                        id="move-target-group",
-                                        type="text",
-                                        value="",
-                                        placeholder="Optional target group",
-                                        className="control",
+                                    html.Div(
+                                        className="file-manager-sidebar",
+                                        children=[
+                                            html.Div(id="file-tree-container", children=build_file_tree(folder_records, initial_folder_key)),
+                                            html.Div(
+                                                className="file-manager-sidebar-card",
+                                                children=[
+                                                    html.Div("Create sub-folder in selected location", className="file-manager-sidebar-title"),
+                                                    dcc.Input(
+                                                        id="create-folder-name",
+                                                        type="text",
+                                                        value="",
+                                                        placeholder="New sub-folder name",
+                                                        className="control",
+                                                    ),
+                                                    html.Button("Create Folder", id="create-folder-btn", n_clicks=0, className="button button-primary file-manager-create-button"),
+                                                ],
+                                            ),
+                                        ],
                                     ),
                                     html.Div(
-                                        className="button-row wrap",
+                                        className="file-manager-main",
                                         children=[
-                                            html.Button("Refresh", id="refresh-files-btn", n_clicks=0, className="button button-secondary"),
-                                            html.Button("Move Selected", id="move-files-btn", n_clicks=0, className="button"),
-                                            html.Button("Delete Selected", id="delete-files-btn", n_clicks=0, className="button button-danger"),
+                                            dash_table.DataTable(
+                                                id="file-table",
+                                                columns=[
+                                                    {"name": "Name", "id": "name"},
+                                                    {"name": "Size", "id": "size_kb"},
+                                                    {"name": "Modified", "id": "modified"},
+                                                ],
+                                                data=initial_browser_rows,
+                                                row_selectable="multi",
+                                                selected_rows=[],
+                                                sort_action="native",
+                                                page_size=16,
+                                                hidden_columns=["row_type", "nav_key", "file_id"],
+                                                style_table={"overflowX": "auto"},
+                                                style_cell={"textAlign": "left", "padding": "12px 14px"},
+                                                style_header={"fontWeight": "bold"},
+                                                style_data_conditional=[
+                                                    {"if": {"state": "selected"}, "backgroundColor": "rgba(37, 99, 235, 0.08)", "border": "1px solid rgba(37, 99, 235, 0.18)"},
+                                                    {"if": {"filter_query": "{row_type} = \"folder\""}, "fontWeight": "700", "color": "#0f766e"},
+                                                    {"if": {"filter_query": "{row_type} = \"back\""}, "color": "#2563eb", "fontWeight": "700"},
+                                                    {"if": {"filter_query": "{row_type} = \"folder\"", "column_id": "name"}, "paddingLeft": "18px"},
+                                                    {"if": {"filter_query": "{row_type} = \"back\"", "column_id": "name"}, "paddingLeft": "18px"},
+                                                ],
+                                            ),
+                                            html.Div(
+                                                className="file-manager-upload-panel",
+                                                children=[
+                                                    html.Div(id="upload-target-note", className="file-manager-upload-note"),
+                                                    dcc.Upload(
+                                                        id="file-upload",
+                                                        multiple=True,
+                                                        className="upload-dropzone file-manager-dropzone file-manager-dropzone-main",
+                                                        children=html.Div(
+                                                            [
+                                                                html.Span("Drop audio into selected folder"),
+                                                                html.Br(),
+                                                                html.Small("or click to browse"),
+                                                            ]
+                                                        ),
+                                                    ),
+                                                ],
+                                            ),
                                         ],
                                     ),
                                 ],
                             ),
                         ],
-                    ),
-                    html.Div(id="file-management-message"),
-                    dash_table.DataTable(
-                        id="group-summary-table",
-                        columns=make_columns(["section", "group", "files", "good_files", "bad_files"]),
-                        data=group_rows,
-                        sort_action="native",
-                        page_size=8,
-                        style_table={"overflowX": "auto", "marginBottom": "18px"},
-                        style_cell={"textAlign": "left", "padding": "10px"},
-                        style_header={"fontWeight": "bold"},
-                    ),
-                    dash_table.DataTable(
-                        id="file-table",
-                        columns=make_columns(["section", "group", "name", "label_hint", "size_kb", "modified"]),
-                        data=rows,
-                        row_selectable="multi",
-                        selected_rows=[],
-                        sort_action="native",
-                        filter_action="native",
-                        page_size=14,
-                        style_table={"overflowX": "auto"},
-                        style_cell={"textAlign": "left", "padding": "10px"},
-                        style_header={"fontWeight": "bold"},
                     ),
                 ],
             ),
@@ -251,7 +285,7 @@ def processing_tab(default_dataset_slug: str) -> html.Div:
                         className="panel-heading",
                         children=[
                             html.H2("Processing"),
-                            html.P("Control preprocessing, hit splitting, feature extraction, and model execution."),
+                            html.P("Control preprocessing, pooled train/test splitting, feature extraction, and model execution."),
                         ],
                     ),
                     html.Div(
@@ -324,6 +358,7 @@ def processing_tab(default_dataset_slug: str) -> html.Div:
                                     html.Div(
                                         className="numeric-grid",
                                         children=[
+                                            html.Div(children=[html.Label("Training Ratio"), dcc.Input(id="train-ratio", type="number", value=DEFAULT_TRAIN_RATIO, step=0.05, min=0.1, max=0.9, className="control")]),
                                             html.Div(children=[html.Label("Low Cut (Hz)"), dcc.Input(id="lowcut-hz", type="number", value=80.0, step=1, className="control")]),
                                             html.Div(children=[html.Label("High Cut (Hz)"), dcc.Input(id="highcut-hz", type="number", value=8000.0, step=1, className="control")]),
                                             html.Div(children=[html.Label("Filter Order"), dcc.Input(id="filter-order", type="number", value=4, step=1, min=1, className="control")]),
@@ -370,7 +405,7 @@ def results_tab(default_dataset_slug: str) -> html.Div:
                             html.P("Inspect a single recording with waveform, preprocessing, onset detection, and clip durations."),
                         ],
                     ),
-                    dcc.Dropdown(id="preview-file-dropdown", placeholder="Select a file from Training, Testing, or Validation"),
+                    dcc.Dropdown(id="preview-file-dropdown", placeholder="Select a file from the train/test pool or validation"),
                     html.Audio(id="preview-audio", controls=True, className="audio-player"),
                     html.Div(id="preview-metadata", className="muted-text"),
                     html.Div(
@@ -392,7 +427,7 @@ def results_tab(default_dataset_slug: str) -> html.Div:
                         className="panel-heading",
                         children=[
                             html.H2("Model Results"),
-                            html.P("Compare training, testing, and validation performance across the selected classifiers."),
+                            html.P("Compare derived training/testing performance and independent validation performance across the selected classifiers."),
                         ],
                     ),
                     dcc.Graph(id="accuracy-graph"),
@@ -465,22 +500,6 @@ def create_layout(default_dataset_slug: str) -> html.Div:
                                     html.P("ML Audio Processing App", className="eyebrow"),
                                     html.H1("Studio-to-Validation Workflow Suite for Experimental impact audio ML classification"),
                                     html.P("Built from the notebook pipeline using Dash, Plotly, librosa, and scikit-learn."),
-                                ],
-                            ),
-                            html.Div(
-                                className="dataset-picker",
-                                children=[
-                                    html.Label("Active Dataset Bundle"),
-                                    dcc.Dropdown(
-                                        id="active-dataset-dropdown",
-                                        options=list_dataset_options(),
-                                        value=default_dataset_slug,
-                                        clearable=False,
-                                    ),
-                                    html.Div(
-                                        "Switch datasets here to browse, process, and demo different collections.",
-                                        className="muted-text",
-                                    ),
                                 ],
                             ),
                         ],

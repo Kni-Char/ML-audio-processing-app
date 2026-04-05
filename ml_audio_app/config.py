@@ -8,6 +8,18 @@ RUNS_ROOT = ARTIFACTS_ROOT / "runs"
 PROCESSED_ROOT = ARTIFACTS_ROOT / "processed_hits"
 DATASET_META_FILENAME = "dataset.json"
 
+SOURCE_SECTION_NAMES = ("pooled", "validation")
+SOURCE_SECTION_LABELS = {
+    "pooled": "Train/Test Pool",
+    "validation": "Validation",
+}
+SOURCE_SECTION_ALIASES = {
+    "pooled": "pooled",
+    "training": "pooled",
+    "testing": "pooled",
+    "validation": "validation",
+}
+
 SECTION_NAMES = ("training", "testing", "validation")
 SECTION_LABELS = {
     "training": "Training",
@@ -31,4 +43,5 @@ ALLOWED_AUDIO_EXTENSIONS = {
 
 DEFAULT_RECORDING_PREFIX = "S"
 DEFAULT_BAD_HITS = 24
+DEFAULT_TRAIN_RATIO = 0.7
 GOOD_HITS = 10

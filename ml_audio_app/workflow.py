@@ -18,6 +18,7 @@ def build_experiment_config(
     lowcut_hz: float,
     highcut_hz: float,
     filter_order: int,
+    train_ratio: float,
     pre_sec: float,
     post_sec: float,
     min_gap_sec: float,
@@ -47,6 +48,7 @@ def build_experiment_config(
     return ExperimentConfig(
         preprocessing=preprocessing,
         split=split,
+        train_ratio=float(train_ratio),
         bad_hits=int(bad_hits),
         selected_models=list(selected_models or []),
         selected_feature_sets=list(selected_feature_sets or []),

@@ -22,8 +22,9 @@ from .config import (
     EXAMPLE_DATASET_SLUG,
     PROCESSED_ROOT,
     RUNS_ROOT,
-    SECTION_LABELS,
-    SECTION_NAMES,
+    SOURCE_SECTION_ALIASES,
+    SOURCE_SECTION_LABELS,
+    SOURCE_SECTION_NAMES,
 )
 
 
@@ -76,6 +77,19 @@ def deduplicate_path(path: Path) -> Path:
         counter += 1
 
 
+def deduplicate_directory(path: Path) -> Path:
+    if not path.exists():
+        return path
+
+    stem = path.name
+    counter = 1
+    while True:
+        candidate = path.with_name(f"{stem}_{counter}")
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
 def decode_data_url(data_url: str) -> bytes:
     if not data_url or "," not in data_url:
         raise ValueError("No audio payload was provided.")
@@ -100,9 +114,18 @@ def dataset_meta_path(dataset_slug: str) -> Path:
 
 
 def section_dir(dataset_slug: str, section: str) -> Path:
-    if section not in SECTION_NAMES:
+    section = canonical_source_section(section)
+    if section not in SOURCE_SECTION_NAMES:
         raise ValueError(f"Unknown section: {section}")
     return dataset_root(dataset_slug) / section
+
+
+def canonical_source_section(section: str) -> str:
+    normalized = slugify_dataset_name(section, default="")
+    mapped = SOURCE_SECTION_ALIASES.get(normalized)
+    if not mapped:
+        raise ValueError(f"Unknown section: {section}")
+    return mapped
 
 
 def normalize_group_path(group: str | None) -> str:
@@ -137,8 +160,10 @@ def ensure_dataset_directories(
 ) -> None:
     root = dataset_root(dataset_slug)
     root.mkdir(parents=True, exist_ok=True)
-    for section in SECTION_NAMES:
+    for section in SOURCE_SECTION_NAMES:
         section_dir(dataset_slug, section).mkdir(parents=True, exist_ok=True)
+
+    migrate_legacy_train_test_sections(dataset_slug)
 
     meta_file = dataset_meta_path(dataset_slug)
     if label is None and meta_file.exists():
@@ -157,6 +182,38 @@ def ensure_dataset_directories(
 
 def humanize_dataset_slug(dataset_slug: str) -> str:
     return slugify_dataset_name(dataset_slug).replace("-", " ").title()
+
+
+def migrate_legacy_train_test_sections(dataset_slug: str) -> None:
+    root = dataset_root(dataset_slug)
+    pooled_root = root / "pooled"
+    pooled_root.mkdir(parents=True, exist_ok=True)
+
+    for legacy_name in ("training", "testing"):
+        legacy_root = root / legacy_name
+        if not legacy_root.exists():
+            continue
+
+        files = [path for path in legacy_root.rglob("*") if path.is_file() and path.suffix.lower() in ALLOWED_AUDIO_EXTENSIONS]
+        for file_path in files:
+            relative = file_path.relative_to(legacy_root)
+            destination = deduplicate_path(pooled_root / relative)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            file_path.rename(destination)
+
+        for empty_dir in sorted(
+            [path for path in legacy_root.rglob("*") if path.is_dir()],
+            key=lambda item: len(item.parts),
+            reverse=True,
+        ):
+            try:
+                empty_dir.rmdir()
+            except OSError:
+                pass
+        try:
+            legacy_root.rmdir()
+        except OSError:
+            pass
 
 
 def read_dataset_metadata(dataset_slug: str) -> dict:
@@ -192,7 +249,7 @@ def list_dataset_records() -> list[dict]:
     for path in DATA_ROOT.iterdir():
         if not path.is_dir():
             continue
-        if any((path / section).exists() for section in SECTION_NAMES):
+        if any((path / section).exists() for section in ("pooled", "validation", "training", "testing")):
             roots.append(path)
 
     if dataset_root(DEFAULT_DATASET_SLUG) not in roots:
@@ -215,8 +272,7 @@ def list_dataset_records() -> list[dict]:
                 "description": meta.get("description", ""),
                 "file_count": len(rows),
                 "group_count": len({(row["section_key"], row["group_key"]) for row in rows}),
-                "training_files": sum(1 for row in rows if row["section_key"] == "training"),
-                "testing_files": sum(1 for row in rows if row["section_key"] == "testing"),
+                "pooled_files": sum(1 for row in rows if row["section_key"] == "pooled"),
                 "validation_files": sum(1 for row in rows if row["section_key"] == "validation"),
             }
         )
@@ -238,14 +294,12 @@ def get_dataset_record(dataset_slug: str) -> dict:
 
 
 def make_file_id(dataset_slug: str, section: str, relative_path: str) -> str:
-    return f"{slugify_dataset_name(dataset_slug)}|{section}|{sanitize_relative_audio_path(relative_path)}"
+    return f"{slugify_dataset_name(dataset_slug)}|{canonical_source_section(section)}|{sanitize_relative_audio_path(relative_path)}"
 
 
 def split_file_id(file_id: str) -> tuple[str, str, str]:
     dataset_slug, section, relative_path = file_id.split("|", 2)
-    if section not in SECTION_NAMES:
-        raise ValueError(f"Unknown section in file id: {section}")
-    return slugify_dataset_name(dataset_slug), section, sanitize_relative_audio_path(relative_path)
+    return slugify_dataset_name(dataset_slug), canonical_source_section(section), sanitize_relative_audio_path(relative_path)
 
 
 def list_audio_paths(dataset_slug: str, section: str) -> list[Path]:
@@ -266,7 +320,7 @@ def list_audio_files(dataset_slug: str) -> list[dict[str, str]]:
     ensure_dataset_directories(dataset_slug)
     rows: list[dict[str, str]] = []
 
-    for section in SECTION_NAMES:
+    for section in SOURCE_SECTION_NAMES:
         root = section_dir(dataset_slug, section)
         for path in list_audio_paths(dataset_slug, section):
             stats = path.stat()
@@ -277,7 +331,7 @@ def list_audio_files(dataset_slug: str) -> list[dict[str, str]]:
                     "file_id": make_file_id(dataset_slug, section, relative_path),
                     "dataset_slug": dataset_slug,
                     "dataset_label": get_dataset_label(dataset_slug),
-                    "section": SECTION_LABELS[section],
+                    "section": SOURCE_SECTION_LABELS[section],
                     "section_key": section,
                     "group": group_key or "Root",
                     "group_key": group_key,
@@ -290,6 +344,54 @@ def list_audio_files(dataset_slug: str) -> list[dict[str, str]]:
             )
 
     return rows
+
+
+def list_folder_records(dataset_slug: str) -> list[dict[str, str | int | bool]]:
+    ensure_dataset_directories(dataset_slug)
+    audio_rows = list_audio_files(dataset_slug)
+    counts: dict[tuple[str, str], int] = defaultdict(int)
+    modified_lookup: dict[tuple[str, str], str] = {}
+
+    for row in audio_rows:
+        section = str(row["section_key"])
+        group = str(row["group_key"] or "")
+        modified = str(row["modified"])
+        counts[(section, "")] += 1
+        modified_lookup[(section, "")] = max(modified_lookup.get((section, ""), ""), modified)
+
+        if group:
+            parts = group.split("/")
+            for index in range(len(parts)):
+                ancestor = "/".join(parts[: index + 1])
+                counts[(section, ancestor)] += 1
+                modified_lookup[(section, ancestor)] = max(modified_lookup.get((section, ancestor), ""), modified)
+
+    records: list[dict[str, str | int | bool]] = []
+    for section in SOURCE_SECTION_NAMES:
+        root = section_dir(dataset_slug, section)
+        directories = [root] + sorted([path for path in root.rglob("*") if path.is_dir()], key=lambda item: item.as_posix().lower())
+        for directory in directories:
+            group = "" if directory == root else directory.relative_to(root).as_posix()
+            parent_group = ""
+            if group and "/" in group:
+                parent_group = group.rsplit("/", 1)[0]
+            name = SOURCE_SECTION_LABELS[section] if not group else directory.name
+            folder_modified = datetime.fromtimestamp(directory.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+            modified = max(modified_lookup.get((section, group), ""), folder_modified)
+            records.append(
+                {
+                    "section_key": section,
+                    "section_label": SOURCE_SECTION_LABELS[section],
+                    "group_key": group,
+                    "parent_group_key": parent_group,
+                    "name": name,
+                    "file_count": int(counts.get((section, group), 0)),
+                    "modified": modified,
+                    "is_root": group == "",
+                }
+            )
+
+    return records
 
 
 def list_group_summary_rows(dataset_slug: str) -> list[dict[str, str | int]]:
@@ -312,7 +414,7 @@ def list_group_summary_rows(dataset_slug: str) -> list[dict[str, str | int]]:
         elif row["label_hint"] == "bad":
             grouped[key]["bad_files"] += 1
 
-    section_index = {SECTION_LABELS[section]: index for index, section in enumerate(SECTION_NAMES)}
+    section_index = {SOURCE_SECTION_LABELS[section]: index for index, section in enumerate(SOURCE_SECTION_NAMES)}
     return sorted(grouped.values(), key=lambda item: (section_index.get(str(item["section"]), 99), str(item["group"]).lower()))
 
 
@@ -324,8 +426,7 @@ def save_uploaded_files(
     group: str = "",
 ) -> dict[str, list[str]]:
     ensure_dataset_directories(dataset_slug)
-    if section not in SECTION_NAMES:
-        raise ValueError(f"Unknown section: {section}")
+    section = canonical_source_section(section)
     if not contents_list or not filenames:
         return {"saved": [], "skipped": []}
 
@@ -346,6 +447,23 @@ def save_uploaded_files(
         saved.append(destination.name)
 
     return {"saved": saved, "skipped": skipped}
+
+
+def create_subfolder(
+    dataset_slug: str,
+    section: str,
+    parent_group: str = "",
+    folder_name: str = "",
+) -> Path:
+    ensure_dataset_directories(dataset_slug)
+    section = canonical_source_section(section)
+    parent_group_path = normalize_group_path(parent_group)
+    clean_folder_name = sanitize_filename(folder_name or "NewFolder", default="NewFolder").replace(".", "_")
+    parent_dir = section_dir(dataset_slug, section) / Path(parent_group_path) if parent_group_path else section_dir(dataset_slug, section)
+    parent_dir.mkdir(parents=True, exist_ok=True)
+    destination = deduplicate_directory(parent_dir / clean_folder_name)
+    destination.mkdir(parents=True, exist_ok=False)
+    return destination
 
 
 def build_recording_name(
@@ -370,8 +488,7 @@ def save_recording(
     condition: str,
 ) -> Path:
     ensure_dataset_directories(dataset_slug)
-    if section not in SECTION_NAMES:
-        raise ValueError(f"Unknown section: {section}")
+    section = canonical_source_section(section)
 
     filename = build_recording_name(prefix=prefix, sample_number=sample_number, condition=condition)
     group_path = normalize_group_path(group)
@@ -383,8 +500,7 @@ def save_recording(
 
 
 def resolve_audio_path(dataset_slug: str, section: str, relative_path: str) -> Path:
-    if section not in SECTION_NAMES:
-        raise ValueError(f"Unknown section: {section}")
+    section = canonical_source_section(section)
     safe_relative = sanitize_relative_audio_path(relative_path)
     return section_dir(dataset_slug, section) / Path(PurePosixPath(safe_relative))
 
@@ -395,8 +511,7 @@ def move_files(
     target_group: str = "",
     target_dataset_slug: str | None = None,
 ) -> list[str]:
-    if target_section not in SECTION_NAMES:
-        raise ValueError(f"Unknown target section: {target_section}")
+    target_section = canonical_source_section(target_section)
 
     moved: list[str] = []
     group_path = normalize_group_path(target_group)
