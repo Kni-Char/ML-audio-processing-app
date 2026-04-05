@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from dash import ALL, Input, Output, State, callback_context, no_update
+from dash import ALL, ClientsideFunction, Input, Output, State, callback_context, no_update
 
 from .config import DEFAULT_RECORDING_PREFIX, DEFAULT_TRAIN_RATIO, SOURCE_SECTION_LABELS
 from .pipeline import build_signal_preview, train_experiment
@@ -16,7 +16,9 @@ from .plots import (
 )
 from .storage import (
     build_recording_name,
+    delete_folders,
     create_subfolder,
+    delete_files,
     get_dataset_record,
     get_latest_run_artifact,
     list_audio_files,
@@ -47,6 +49,21 @@ from .workflow import build_experiment_config
 
 
 def register_callbacks(app, default_active_dataset: str) -> None:
+    app.clientside_callback(
+        ClientsideFunction(namespace="clientside", function_name="setProcessingStartedAt"),
+        Output("processing-started-at", "data"),
+        Input("run-pipeline-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+
+    app.clientside_callback(
+        ClientsideFunction(namespace="clientside", function_name="updateProcessingTimer"),
+        Output("processing-timer", "children"),
+        Output("processing-progress-note", "children"),
+        Input("processing-started-at", "data"),
+        Input("processing-timer-interval", "n_intervals"),
+    )
+
     @app.callback(
         Output("recording-filename-preview", "children"),
         Input("active-dataset-dropdown", "value"),
@@ -134,11 +151,14 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         Output("active-dataset-banner", "children", allow_duplicate=True),
         Output("file-manager-refresh-token", "data", allow_duplicate=True),
         Output("create-folder-name", "value"),
+        Output("file-upload-relative-paths", "value"),
         Input("active-dataset-dropdown", "value"),
         Input("file-upload", "contents"),
         Input("refresh-files-btn", "n_clicks"),
         Input("create-folder-btn", "n_clicks"),
+        Input("delete-files-btn", "n_clicks"),
         State("file-upload", "filename"),
+        State("file-upload-relative-paths", "value"),
         State("selected-folder-store", "data"),
         State("create-folder-name", "value"),
         State("file-table", "data"),
@@ -152,7 +172,9 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         upload_contents,
         _refresh_clicks,
         _create_folder_clicks,
+        _delete_clicks,
         upload_filenames,
+        upload_relative_paths_raw,
         selected_folder_key,
         create_folder_name,
         table_data,
@@ -166,11 +188,18 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         message = message_block(f"{dataset_label} is ready for uploads and section moves.", "info")
         current_rows = visible_rows or table_data or list_audio_files(dataset_slug)
         selected_rows = selected_rows or []
-        selected_ids = [
-            current_rows[index].get("file_id")
-            for index in selected_rows
-            if index < len(current_rows) and current_rows[index].get("file_id")
-        ]
+        selected_file_ids = []
+        selected_folder_targets = []
+        for index in selected_rows:
+            if index >= len(current_rows):
+                continue
+            row = current_rows[index]
+            if row.get("row_type") == "file" and row.get("file_id"):
+                selected_file_ids.append(row["file_id"])
+            elif row.get("row_type") == "folder" and row.get("nav_key"):
+                folder_section, folder_group = parse_folder_key(row["nav_key"])
+                if folder_section and folder_group:
+                    selected_folder_targets.append((folder_section, folder_group))
 
         try:
             if trigger == "active-dataset-dropdown":
@@ -179,12 +208,18 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                 upload_section, upload_group = parse_folder_key(selected_folder_key)
                 if not upload_section:
                     raise ValueError("Select a destination folder in the tree before uploading.")
-                result = save_uploaded_files(upload_contents, upload_filenames, dataset_slug, upload_section, upload_group or "")
+                try:
+                    upload_relative_paths = json.loads(upload_relative_paths_raw) if upload_relative_paths_raw else []
+                except json.JSONDecodeError:
+                    upload_relative_paths = []
+                result = save_uploaded_files(upload_contents, upload_filenames, dataset_slug, upload_section, upload_group or "", upload_relative_paths)
                 saved_count = len(result["saved"])
                 skipped_count = len(result["skipped"])
                 message_text = f"Uploaded {saved_count} file(s) to {dataset_label} / {SOURCE_SECTION_LABELS[upload_section]}."
                 if upload_group:
                     message_text += f" Folder: {upload_group}."
+                elif upload_relative_paths and any("/" in path or "\\" in path for path in upload_relative_paths):
+                    message_text += " Folder structure was preserved."
                 if skipped_count:
                     message_text += f" Skipped {skipped_count} unsupported file(s)."
                 message = message_block(message_text, "success")
@@ -197,6 +232,23 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                 if target_group:
                     parent_label += f" / {target_group}"
                 message = message_block(f"Created folder '{created.name}' inside {dataset_label} / {parent_label}.", "success")
+            elif trigger == "delete-files-btn":
+                if not selected_file_ids and not selected_folder_targets:
+                    current_section, current_group = parse_folder_key(selected_folder_key)
+                    if current_section and current_group:
+                        selected_folder_targets.append((current_section, current_group))
+
+                deleted_files = delete_files(selected_file_ids)
+                deleted_folders = delete_folders(dataset_slug, selected_folder_targets)
+
+                deleted_parts = []
+                if deleted_files:
+                    deleted_parts.append(f"{len(deleted_files)} file(s)")
+                if deleted_folders:
+                    deleted_parts.append(f"{len(deleted_folders)} folder(s)")
+                if not deleted_parts:
+                    raise ValueError("Select one or more files or a sub-folder before deleting. Root sections cannot be deleted.")
+                message = message_block(f"Deleted {' and '.join(deleted_parts)} from {dataset_label}.", "success")
             elif trigger == "refresh-files-btn":
                 message = message_block(f"Refreshed {dataset_label}.", "info")
         except Exception as exc:
@@ -208,6 +260,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
             build_file_summary_cards(rows),
             build_dataset_banner(dataset_slug),
             int(refresh_token or 0) + 1,
+            "",
             "",
         )
 
@@ -243,6 +296,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
     @app.callback(
         Output("file-tree-container", "children"),
         Output("upload-target-note", "children"),
+        Output("upload-directory-mode", "children"),
         Output("file-table", "data"),
         Output("file-table", "selected_rows"),
         Input("active-dataset-dropdown", "value"),
@@ -260,16 +314,50 @@ def register_callbacks(app, default_active_dataset: str) -> None:
             destination = SOURCE_SECTION_LABELS[upload_section]
             if upload_group:
                 destination += f" / {upload_group}"
-            upload_note = f"Uploads will go into: {destination}"
+            if upload_group:
+                upload_note = f"Uploads will go into: {destination}"
+                upload_mode = "subfolder"
+            else:
+                upload_note = (
+                    f"Uploads will go into: {destination}. Root selected, so you can choose a single folder like Set1 "
+                    f"or a parent folder that contains multiple bundles such as Set1, Set2, Set3."
+                )
+                upload_mode = "root"
         else:
             upload_note = "Select a folder in the tree to upload audio."
+            upload_mode = "subfolder"
         browser_rows = build_browser_rows(rows, folder_records, effective_folder_key)
         return (
             build_file_tree(folder_records, effective_folder_key),
             upload_note,
+            upload_mode,
             browser_rows,
             [],
         )
+
+    @app.callback(
+        Output("file-table", "selected_rows", allow_duplicate=True),
+        Input("toggle-select-all-btn", "n_clicks"),
+        State("file-table", "data"),
+        State("file-table", "selected_rows"),
+        prevent_initial_call=True,
+    )
+    def toggle_select_all_rows(_n_clicks, table_rows, selected_rows):
+        if not table_rows:
+            return []
+
+        selectable_rows = [
+            index
+            for index, row in enumerate(table_rows)
+            if row.get("row_type") in {"file", "folder"}
+        ]
+        if not selectable_rows:
+            return []
+
+        current_selection = sorted(index for index in (selected_rows or []) if index in selectable_rows)
+        if current_selection == selectable_rows:
+            return []
+        return selectable_rows
 
     @app.callback(
         Output("selected-folder-store", "data", allow_duplicate=True),
@@ -339,12 +427,26 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         return status, status
 
     @app.callback(
+        Output("preprocessing-detail-container", "style"),
+        Output("preprocessing-advanced-container", "style"),
+        Input("preprocessing-enabled", "value"),
+        Input("preprocessing-detail-flags", "value"),
+    )
+    def toggle_preprocessing_controls(preprocessing_enabled, preprocessing_detail_flags):
+        enabled = "enabled" in (preprocessing_enabled or [])
+        bandpass_enabled = "apply_bandpass" in (preprocessing_detail_flags or [])
+        detail_style = {"display": "grid"} if enabled else {"display": "none"}
+        advanced_style = {"display": "grid"} if enabled and bandpass_enabled else {"display": "none"}
+        return detail_style, advanced_style
+
+    @app.callback(
         Output("processing-message", "children"),
         Output("current-run-store", "data", allow_duplicate=True),
         Input("run-pipeline-btn", "n_clicks"),
         State("run-mode", "value"),
         State("saved-run-dropdown", "value"),
-        State("preprocessing-flags", "value"),
+        State("preprocessing-enabled", "value"),
+        State("preprocessing-detail-flags", "value"),
         State("lowcut-hz", "value"),
         State("highcut-hz", "value"),
         State("filter-order", "value"),
@@ -359,13 +461,18 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         State("model-checklist", "value"),
         State("feature-set-checklist", "value"),
         State("save-processed-hits", "value"),
+        running=[
+            (Output("processing-progress-shell", "style"), {"display": "grid"}, {"display": "none"}),
+            (Output("processing-timer-interval", "disabled"), False, True),
+        ],
         prevent_initial_call=True,
     )
     def run_pipeline(
         _n_clicks,
         run_mode,
         saved_run_path,
-        preprocessing_flags,
+        preprocessing_enabled,
+        preprocessing_detail_flags,
         lowcut_hz,
         highcut_hz,
         filter_order,
@@ -383,6 +490,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
     ):
         dataset_slug = active_dataset_slug or default_active_dataset
         dataset_label = get_dataset_record(dataset_slug)["label"]
+        preprocessing_flags = list(preprocessing_enabled or []) + list(preprocessing_detail_flags or [])
         try:
             if run_mode == "use_saved":
                 if not saved_run_path:
@@ -457,7 +565,8 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         Output("spectrogram-graph", "figure"),
         Output("clip-lengths-graph", "figure"),
         Input("preview-file-dropdown", "value"),
-        State("preprocessing-flags", "value"),
+        State("preprocessing-enabled", "value"),
+        State("preprocessing-detail-flags", "value"),
         State("lowcut-hz", "value"),
         State("highcut-hz", "value"),
         State("filter-order", "value"),
@@ -470,7 +579,8 @@ def register_callbacks(app, default_active_dataset: str) -> None:
     )
     def update_signal_preview(
         file_id,
-        preprocessing_flags,
+        preprocessing_enabled,
+        preprocessing_detail_flags,
         lowcut_hz,
         highcut_hz,
         filter_order,
@@ -491,6 +601,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
 
         dataset_slug, section, relative_path = file_id.split("|", 2)
         file_path = resolve_audio_path(dataset_slug, section, relative_path)
+        preprocessing_flags = list(preprocessing_enabled or []) + list(preprocessing_detail_flags or [])
         config = build_experiment_config(
             preprocessing_flags or [],
             lowcut_hz,

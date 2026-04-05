@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import shutil
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -424,6 +425,7 @@ def save_uploaded_files(
     dataset_slug: str,
     section: str,
     group: str = "",
+    relative_paths: Sequence[str] | None = None,
 ) -> dict[str, list[str]]:
     ensure_dataset_directories(dataset_slug)
     section = canonical_source_section(section)
@@ -435,16 +437,43 @@ def save_uploaded_files(
     group_path = normalize_group_path(group)
     target_dir = section_dir(dataset_slug, section) / Path(group_path) if group_path else section_dir(dataset_slug, section)
     target_dir.mkdir(parents=True, exist_ok=True)
+    normalized_relative_paths = list(relative_paths or [])
 
-    for contents, filename in zip(contents_list, filenames):
+    # When uploading into a root section, allow the user to pick one parent folder
+    # that contains multiple child folders such as Set1/Set2/... and strip that
+    # wrapper folder so the child folders land directly in the selected section.
+    if not group_path and normalized_relative_paths:
+        parsed_parts = [
+            PurePosixPath(sanitize_relative_audio_path(path)).parts
+            for path in normalized_relative_paths
+            if path and any(sep in path for sep in ["/", "\\"])
+        ]
+        if parsed_parts and all(len(parts) >= 3 for parts in parsed_parts):
+            second_level_names = {parts[1] for parts in parsed_parts}
+            if len(second_level_names) > 1:
+                normalized_relative_paths = [
+                    str(PurePosixPath(*PurePosixPath(sanitize_relative_audio_path(path)).parts[1:]))
+                    if path and any(sep in path for sep in ["/", "\\"])
+                    else path
+                    for path in normalized_relative_paths
+                ]
+
+    for index, (contents, filename) in enumerate(zip(contents_list, filenames)):
         if not is_allowed_audio_file(filename):
             skipped.append(filename)
             continue
 
-        clean_name = sanitize_filename(filename)
-        destination = deduplicate_path(target_dir / clean_name)
+        relative_hint = normalized_relative_paths[index] if normalized_relative_paths and index < len(normalized_relative_paths) else ""
+        if group_path:
+            clean_relative = sanitize_filename(filename)
+            destination = deduplicate_path(target_dir / clean_relative)
+        else:
+            normalized_relative = sanitize_relative_audio_path(relative_hint) if relative_hint and any(sep in relative_hint for sep in ["/", "\\"]) else sanitize_filename(filename)
+            destination = deduplicate_path(target_dir / Path(PurePosixPath(normalized_relative)))
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(decode_data_url(contents))
-        saved.append(destination.name)
+        saved.append(destination.relative_to(target_dir).as_posix())
 
     return {"saved": saved, "skipped": skipped}
 
@@ -551,6 +580,38 @@ def delete_files(file_ids: Iterable[str]) -> list[str]:
             path.unlink()
             deleted.append(path.name)
             _cleanup_empty_parents(path, section_dir(dataset_slug, section))
+    return deleted
+
+
+def delete_folders(dataset_slug: str, folder_keys: Iterable[tuple[str, str]]) -> list[str]:
+    deleted: list[str] = []
+    normalized_targets: list[tuple[str, str]] = []
+
+    for section, group in folder_keys:
+        safe_section = canonical_source_section(section)
+        safe_group = normalize_group_path(group)
+        if not safe_group:
+            continue
+        normalized_targets.append((safe_section, safe_group))
+
+    unique_targets = sorted(set(normalized_targets), key=lambda item: (item[0], len(item[1]), item[1].lower()))
+    pruned_targets: list[tuple[str, str]] = []
+    for section, group in unique_targets:
+        if any(
+            section == existing_section and (group == existing_group or group.startswith(f"{existing_group}/"))
+            for existing_section, existing_group in pruned_targets
+        ):
+            continue
+        pruned_targets.append((section, group))
+
+    for section, group in pruned_targets:
+        root = section_dir(dataset_slug, section)
+        target = root / Path(group)
+        if not target.exists() or not target.is_dir():
+            continue
+        shutil.rmtree(target)
+        deleted.append(target.name)
+
     return deleted
 
 

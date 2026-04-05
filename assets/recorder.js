@@ -23,7 +23,24 @@
     if (!el) {
       return;
     }
-    el.value = value;
+
+    const prototype =
+      el.tagName === "TEXTAREA"
+        ? window.HTMLTextAreaElement && window.HTMLTextAreaElement.prototype
+        : window.HTMLInputElement && window.HTMLInputElement.prototype;
+    const setter = prototype ? Object.getOwnPropertyDescriptor(prototype, "value")?.set : null;
+    const previousValue = el.value;
+
+    if (setter) {
+      setter.call(el, value);
+    } else {
+      el.value = value;
+    }
+
+    if (el._valueTracker) {
+      el._valueTracker.setValue(previousValue);
+    }
+
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }
@@ -106,6 +123,7 @@
       processor = audioContext.createScriptProcessor(4096, 1, 1);
       buffers = [];
       recording = true;
+      setDashValue("recording-data", "");
 
       processor.onaudioprocess = function (event) {
         if (!recording) {
@@ -117,6 +135,11 @@
 
       mediaSource.connect(processor);
       processor.connect(audioContext.destination);
+      const preview = byId("recording-preview-audio");
+      if (preview) {
+        preview.removeAttribute("src");
+        preview.load();
+      }
       setStatus("Recording... press Stop when finished.");
     } catch (error) {
       setStatus("Microphone access was not granted.");

@@ -153,6 +153,8 @@ def file_management_tab(default_dataset_slug: str) -> html.Div:
         children=[
             dcc.Store(id="selected-folder-store", data=initial_folder_key),
             dcc.Store(id="file-manager-refresh-token", data=0),
+            dcc.Textarea(id="file-upload-relative-paths", value="", style={"display": "none"}),
+            html.Div(id="upload-directory-mode", style={"display": "none"}, children="subfolder"),
             html.Div(
                 className="panel",
                 children=[
@@ -211,6 +213,13 @@ def file_management_tab(default_dataset_slug: str) -> html.Div:
                                     html.Div(
                                         className="file-manager-main",
                                         children=[
+                                            html.Div(
+                                                className="button-row",
+                                                children=[
+                                                    html.Button("Delete Selected", id="delete-files-btn", n_clicks=0, className="button button-danger"),
+                                                    html.Button("Select / Deselect All", id="toggle-select-all-btn", n_clicks=0, className="button button-secondary"),
+                                                ],
+                                            ),
                                             dash_table.DataTable(
                                                 id="file-table",
                                                 columns=[
@@ -224,8 +233,17 @@ def file_management_tab(default_dataset_slug: str) -> html.Div:
                                                 sort_action="native",
                                                 page_size=16,
                                                 hidden_columns=["row_type", "nav_key", "file_id"],
+                                                css=[
+                                                    {"selector": ".show-hide", "rule": "display: none !important;"},
+                                                    {"selector": "th.dash-select-header, td.dash-select-cell", "rule": "width: 52px !important; min-width: 52px !important; max-width: 52px !important; text-align: center;"},
+                                                ],
                                                 style_table={"overflowX": "auto"},
                                                 style_cell={"textAlign": "left", "padding": "12px 14px"},
+                                                style_cell_conditional=[
+                                                    {"if": {"column_id": "name"}, "minWidth": "320px", "width": "55%"},
+                                                    {"if": {"column_id": "size_kb"}, "minWidth": "120px", "width": "15%"},
+                                                    {"if": {"column_id": "modified"}, "minWidth": "190px", "width": "30%"},
+                                                ],
                                                 style_header={"fontWeight": "bold"},
                                                 style_data_conditional=[
                                                     {"if": {"state": "selected"}, "backgroundColor": "rgba(37, 99, 235, 0.08)", "border": "1px solid rgba(37, 99, 235, 0.18)"},
@@ -282,101 +300,159 @@ def processing_tab(default_dataset_slug: str) -> html.Div:
                 className="panel",
                 children=[
                     html.Div(
-                        className="panel-heading",
+                        className="panel-heading processing-panel-heading",
                         children=[
-                            html.H2("Processing"),
-                            html.P("Control preprocessing, pooled train/test splitting, feature extraction, and model execution."),
+                            html.Div(
+                                children=[
+                                    html.H2("Processing"),
+                                    html.P("Control preprocessing, pooled train/test splitting, feature extraction, and model execution."),
+                                ],
+                            ),
+                            html.Button("Run Processing Pipeline", id="run-pipeline-btn", n_clicks=0, className="button button-primary"),
                         ],
                     ),
                     html.Div(
-                        className="form-grid two-column",
+                        id="processing-progress-shell",
+                        className="processing-progress-shell",
+                        style={"display": "none"},
                         children=[
                             html.Div(
-                                className="stack",
+                                className="processing-progress-header",
                                 children=[
-                                    html.Label("Run Mode"),
-                                    dcc.RadioItems(
-                                        id="run-mode",
-                                        options=[
-                                            {"label": "Train new models", "value": "train_new"},
-                                            {"label": "Use an existing saved run", "value": "use_saved"},
-                                        ],
-                                        value=default_run_mode,
-                                        className="inline-options",
-                                    ),
-                                    html.Label("Saved Run"),
-                                    dcc.Dropdown(
-                                        id="saved-run-dropdown",
-                                        options=list_run_artifacts(default_dataset_slug),
-                                        value=default_saved_run,
-                                        placeholder="Select a saved run",
-                                    ),
-                                    html.Div(attached_run_note, className="muted-text"),
-                                    html.Label("Preprocessing"),
+                                    html.Span("Pipeline running", className="processing-progress-title"),
+                                    html.Span(id="processing-timer", className="processing-progress-timer", children="00:00"),
+                                ],
+                            ),
+                            html.Div(
+                                className="processing-progress-track",
+                                children=[html.Div(id="processing-progress-bar", className="processing-progress-bar")],
+                            ),
+                            html.Div(
+                                id="processing-progress-note",
+                                className="muted-text processing-progress-note",
+                                children="Preparing pooled dataset, splitting hits, extracting features, and evaluating the selected models.",
+                            ),
+                        ],
+                    ),
+                    html.Div(id="processing-message"),
+                    html.Div(
+                        className="stack",
+                        children=[
+                            html.Label("Saved Run"),
+                            dcc.Dropdown(
+                                id="saved-run-dropdown",
+                                options=list_run_artifacts(default_dataset_slug),
+                                value=default_saved_run,
+                                placeholder="Select a saved run",
+                            ),
+                            html.Div(attached_run_note, className="muted-text"),
+                            html.Label("Run Mode"),
+                            dcc.RadioItems(
+                                id="run-mode",
+                                options=[
+                                    {"label": "Train new models", "value": "train_new"},
+                                    {"label": "Use an existing saved run", "value": "use_saved"},
+                                ],
+                                value=default_run_mode,
+                                className="inline-options",
+                            ),
+                            html.Label("Preprocessing"),
+                            dcc.Checklist(
+                                id="preprocessing-enabled",
+                                options=[
+                                    {"label": "Enable preprocessing", "value": "enabled"},
+                                ],
+                                value=[],
+                                className="stacked-options",
+                            ),
+                            html.Div(
+                                id="preprocessing-detail-container",
+                                className="processing-nested-options",
+                                style={"display": "none"},
+                                children=[
                                     dcc.Checklist(
-                                        id="preprocessing-flags",
+                                        id="preprocessing-detail-flags",
                                         options=[
-                                            {"label": "Enable preprocessing", "value": "enabled"},
                                             {"label": "Remove DC offset", "value": "remove_dc"},
                                             {"label": "Normalize peak", "value": "normalize_peak"},
                                             {"label": "Apply bandpass", "value": "apply_bandpass"},
                                         ],
-                                        value=["enabled", "remove_dc", "normalize_peak", "apply_bandpass"],
-                                        className="stacked-options",
-                                    ),
-                                    html.Label("Feature Sets"),
-                                    dcc.Checklist(
-                                        id="feature-set-checklist",
-                                        options=[{"label": "PSD", "value": "PSD"}, {"label": "MFCC", "value": "MFCC"}],
-                                        value=["PSD", "MFCC"],
-                                        className="inline-options",
-                                    ),
-                                    html.Label("Models"),
-                                    dcc.Checklist(
-                                        id="model-checklist",
-                                        options=[
-                                            {"label": "KNN", "value": "KNN"},
-                                            {"label": "Decision Tree", "value": "Decision Tree"},
-                                            {"label": "Logistic Regression", "value": "Logistic Regression"},
-                                            {"label": "SVM", "value": "SVM"},
-                                        ],
-                                        value=["KNN", "Decision Tree", "Logistic Regression", "SVM"],
-                                        className="stacked-options",
-                                    ),
-                                    html.Label("Artifacts"),
-                                    dcc.Checklist(
-                                        id="save-processed-hits",
-                                        options=[{"label": "Save split single-hit clips under artifacts/processed_hits", "value": "save"}],
-                                        value=["save"],
+                                        value=["remove_dc", "normalize_peak", "apply_bandpass"],
                                         className="stacked-options",
                                     ),
                                 ],
                             ),
-                            html.Div(
-                                className="stack",
+                            html.Label("Feature Representation(s)"),
+                            dcc.Checklist(
+                                id="feature-set-checklist",
+                                options=[{"label": "PSD", "value": "PSD"}, {"label": "MFCC", "value": "MFCC"}],
+                                value=["PSD", "MFCC"],
+                                className="inline-options",
+                            ),
+                            html.Label("Models"),
+                            dcc.Checklist(
+                                id="model-checklist",
+                                options=[
+                                    {"label": "KNN", "value": "KNN"},
+                                    {"label": "Decision Tree", "value": "Decision Tree"},
+                                    {"label": "Logistic Regression", "value": "Logistic Regression"},
+                                    {"label": "SVM", "value": "SVM"},
+                                ],
+                                value=["KNN", "Decision Tree", "Logistic Regression", "SVM"],
+                                className="stacked-options",
+                            ),
+                            html.Label("Artifacts"),
+                            dcc.Checklist(
+                                id="save-processed-hits",
+                                options=[{"label": "Save split single-hit clips under artifacts/processed_hits", "value": "save"}],
+                                value=["save"],
+                                className="stacked-options",
+                            ),
+                            html.Details(
+                                className="advanced-panel",
                                 children=[
+                                    html.Summary("Advanced settings"),
                                     html.Div(
-                                        className="numeric-grid",
+                                        className="advanced-panel-body stack",
                                         children=[
-                                            html.Div(children=[html.Label("Training Ratio"), dcc.Input(id="train-ratio", type="number", value=DEFAULT_TRAIN_RATIO, step=0.05, min=0.1, max=0.9, className="control")]),
-                                            html.Div(children=[html.Label("Low Cut (Hz)"), dcc.Input(id="lowcut-hz", type="number", value=80.0, step=1, className="control")]),
-                                            html.Div(children=[html.Label("High Cut (Hz)"), dcc.Input(id="highcut-hz", type="number", value=8000.0, step=1, className="control")]),
-                                            html.Div(children=[html.Label("Filter Order"), dcc.Input(id="filter-order", type="number", value=4, step=1, min=1, className="control")]),
-                                            html.Div(children=[html.Label("Bad Hits per Recording"), dcc.Input(id="bad-hits", type="number", value=DEFAULT_BAD_HITS, step=1, min=1, className="control")]),
-                                            html.Div(children=[html.Label("Pre Window (s)"), dcc.Input(id="pre-sec", type="number", value=0.02, step=0.01, className="control")]),
-                                            html.Div(children=[html.Label("Post Window (s)"), dcc.Input(id="post-sec", type="number", value=0.20, step=0.01, className="control")]),
-                                            html.Div(children=[html.Label("Min Gap (s)"), dcc.Input(id="min-gap-sec", type="number", value=0.04, step=0.01, className="control")]),
-                                            html.Div(children=[html.Label("Hop Length"), dcc.Input(id="hop-length", type="number", value=256, step=1, min=32, className="control")]),
+                                            html.Div(
+                                                className="numeric-grid",
+                                                children=[
+                                                    html.Div(children=[html.Label("Training Ratio"), dcc.Input(id="train-ratio", type="number", value=DEFAULT_TRAIN_RATIO, step=0.05, min=0.1, max=0.9, className="control")]),
+                                                    html.Div(children=[html.Label("Bad Hits per Recording"), dcc.Input(id="bad-hits", type="number", value=DEFAULT_BAD_HITS, step=1, min=1, className="control")]),
+                                                    html.Div(children=[html.Label("Pre Window (s)"), dcc.Input(id="pre-sec", type="number", value=0.02, step=0.01, className="control")]),
+                                                    html.Div(children=[html.Label("Post Window (s)"), dcc.Input(id="post-sec", type="number", value=0.20, step=0.01, className="control")]),
+                                                    html.Div(children=[html.Label("Min Gap (s)"), dcc.Input(id="min-gap-sec", type="number", value=0.04, step=0.01, className="control")]),
+                                                    html.Div(children=[html.Label("Hop Length"), dcc.Input(id="hop-length", type="number", value=256, step=1, min=32, className="control")]),
+                                                ],
+                                            ),
+                                            html.Div(
+                                                id="preprocessing-advanced-container",
+                                                className="processing-nested-advanced",
+                                                style={"display": "none"},
+                                                children=[
+                                                    html.Div(
+                                                        className="numeric-grid",
+                                                        children=[
+                                                            html.Div(children=[html.Label("Low Cut (Hz)"), dcc.Input(id="lowcut-hz", type="number", value=80.0, step=1, className="control")]),
+                                                            html.Div(children=[html.Label("High Cut (Hz)"), dcc.Input(id="highcut-hz", type="number", value=8000.0, step=1, className="control")]),
+                                                            html.Div(children=[html.Label("Filter Order"), dcc.Input(id="filter-order", type="number", value=4, step=1, min=1, className="control")]),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                            html.Div(
+                                                children=[
+                                                    html.Label("Adaptive Delta List"),
+                                                    dcc.Textarea(
+                                                        id="delta-list",
+                                                        value="0.20, 0.15, 0.12, 0.10, 0.08, 0.06, 0.05, 0.04",
+                                                        className="control control-textarea",
+                                                    ),
+                                                ],
+                                            ),
                                         ],
                                     ),
-                                    html.Label("Adaptive Delta List"),
-                                    dcc.Textarea(
-                                        id="delta-list",
-                                        value="0.20, 0.15, 0.12, 0.10, 0.08, 0.06, 0.05, 0.04",
-                                        className="control control-textarea",
-                                    ),
-                                    html.Div(className="button-row", children=[html.Button("Run Processing Pipeline", id="run-pipeline-btn", n_clicks=0, className="button button-primary")]),
-                                    html.Div(id="processing-message"),
                                 ],
                             ),
                         ],
@@ -488,6 +564,8 @@ def create_layout(default_dataset_slug: str) -> html.Div:
         className="app-shell",
         children=[
             dcc.Store(id="current-run-store", data=initial_run_store),
+            dcc.Store(id="processing-started-at", data=None),
+            dcc.Interval(id="processing-timer-interval", interval=1000, n_intervals=0, disabled=True),
             html.Header(
                 className="app-header",
                 children=[
