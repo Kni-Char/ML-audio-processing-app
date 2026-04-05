@@ -1,6 +1,6 @@
 # ML-audio-processing-app
 
-Dash-based web app for recording, organizing, processing, and classifying audio samples using the workflow from `Machine_Learning_Assignment_3_2237075_BASE.ipynb`.
+Dash-based web app for recording, organizing, processing, and classifying audio samples.
 
 ## Features
 
