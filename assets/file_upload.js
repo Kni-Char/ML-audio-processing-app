@@ -89,6 +89,13 @@
       return;
     }
 
+    const customRelativePaths = input.dataset.customRelativePaths;
+    if (customRelativePaths) {
+      setDashValue("file-upload-relative-paths", customRelativePaths);
+      delete input.dataset.customRelativePaths;
+      return;
+    }
+
     const files = Array.from(input.files || []);
     const relativePaths = files.map((file) => file.webkitRelativePath || file.name);
     setDashValue("file-upload-relative-paths", JSON.stringify(relativePaths));
@@ -154,7 +161,42 @@
     });
   }
 
-  function syncFilesToDashInput(files) {
+  function collectFilesFromHandle(handle, currentPath) {
+    return new Promise(function (resolve, reject) {
+      if (!handle) {
+        resolve([]);
+        return;
+      }
+
+      if (handle.kind === "file") {
+        handle
+          .getFile()
+          .then(function (file) {
+            const relativePath = currentPath ? `${currentPath}/${file.name}` : file.name;
+            resolve([{ file: file, relativePath: relativePath }]);
+          })
+          .catch(reject);
+        return;
+      }
+
+      if (handle.kind !== "directory") {
+        resolve([]);
+        return;
+      }
+
+      (async function () {
+        const collected = [];
+        const nextPath = currentPath ? `${currentPath}/${handle.name}` : handle.name;
+        for await (const child of handle.values()) {
+          const childRecords = await collectFilesFromHandle(child, nextPath);
+          collected.push(...childRecords);
+        }
+        resolve(collected);
+      })().catch(reject);
+    });
+  }
+
+  function syncFilesToDashInput(files, relativePaths) {
     const input = getUploadInput();
     if (!input || !window.DataTransfer) {
       return;
@@ -162,6 +204,11 @@
 
     const transfer = new DataTransfer();
     files.forEach((file) => transfer.items.add(file));
+    if (relativePaths && relativePaths.length) {
+      input.dataset.customRelativePaths = JSON.stringify(relativePaths);
+    } else {
+      delete input.dataset.customRelativePaths;
+    }
     input.files = transfer.files;
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }
@@ -182,7 +229,7 @@
       const files = Array.from(picker.files || []);
       const relativePaths = files.map((file) => file.webkitRelativePath || file.name);
       setDashValue("file-upload-relative-paths", JSON.stringify(relativePaths));
-      syncFilesToDashInput(files);
+      syncFilesToDashInput(files, relativePaths);
       picker.remove();
     });
 
@@ -236,33 +283,59 @@
         return file.webkitRelativePath || file.name;
       });
       setDashValue("file-upload-relative-paths", JSON.stringify(relativePaths));
-      syncFilesToDashInput(droppedFiles);
+      syncFilesToDashInput(droppedFiles, relativePaths);
       return;
     }
 
     const items = Array.from((event.dataTransfer && event.dataTransfer.items) || []);
-    const entries = items
-      .map(function (item) {
-        return item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
-      })
-      .filter(Boolean);
 
-    if (!entries.length) {
-      const fallbackFiles = Array.from((event.dataTransfer && event.dataTransfer.files) || []);
-      const fallbackPaths = fallbackFiles.map(function (file) {
-        return file.webkitRelativePath || file.name;
-      });
-      setDashValue("file-upload-relative-paths", JSON.stringify(fallbackPaths));
-      syncFilesToDashInput(fallbackFiles);
-      return;
-    }
+    const handlePromises = items.map(function (item) {
+      if (typeof item.getAsFileSystemHandle === "function") {
+        return item.getAsFileSystemHandle().catch(function () {
+          return null;
+        });
+      }
+      return Promise.resolve(null);
+    });
 
-    Promise.all(
-      entries.map(function (entry) {
-        return collectDroppedFiles(entry, "");
+    Promise.all(handlePromises)
+      .then(function (handles) {
+        const validHandles = handles.filter(Boolean);
+        if (validHandles.length) {
+          return Promise.all(
+            validHandles.map(function (handle) {
+              return collectFilesFromHandle(handle, "");
+            })
+          );
+        }
+
+        const entries = items
+          .map(function (item) {
+            return item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+          })
+          .filter(Boolean);
+
+        if (!entries.length) {
+          return null;
+        }
+
+        return Promise.all(
+          entries.map(function (entry) {
+            return collectDroppedFiles(entry, "");
+          })
+        );
       })
-    )
       .then(function (results) {
+        if (!results) {
+          const fallbackFiles = Array.from((event.dataTransfer && event.dataTransfer.files) || []);
+          const fallbackPaths = fallbackFiles.map(function (file) {
+            return file.webkitRelativePath || file.name;
+          });
+          setDashValue("file-upload-relative-paths", JSON.stringify(fallbackPaths));
+          syncFilesToDashInput(fallbackFiles, fallbackPaths);
+          return;
+        }
+
         const flattened = results.flat();
         const files = flattened.map(function (record) {
           return record.file;
@@ -271,7 +344,7 @@
           return record.relativePath.replace(/^\/+/, "");
         });
         setDashValue("file-upload-relative-paths", JSON.stringify(relativePaths));
-        syncFilesToDashInput(files);
+        syncFilesToDashInput(files, relativePaths);
       })
       .catch(function () {
         const fallbackFiles = Array.from((event.dataTransfer && event.dataTransfer.files) || []);
@@ -279,7 +352,7 @@
           return file.webkitRelativePath || file.name;
         });
         setDashValue("file-upload-relative-paths", JSON.stringify(fallbackPaths));
-        syncFilesToDashInput(fallbackFiles);
+        syncFilesToDashInput(fallbackFiles, fallbackPaths);
       });
   }
 
