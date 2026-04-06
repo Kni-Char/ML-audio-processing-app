@@ -591,7 +591,6 @@ def create_layout(default_dataset_slug: str) -> html.Div:
                                 children=[
                                     html.P("ML Audio Processing App", className="eyebrow"),
                                     html.H1("Studio-to-Validation Workflow Suite for Experimental impact audio ML classification"),
-                                    html.P("Built from the notebook pipeline using Dash, Plotly, librosa, and scikit-learn."),
                                 ],
                             ),
                         ],

@@ -136,7 +136,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
             )
             rows = list_audio_files(dataset_slug)
             return (
-                message_block(f"Saved recording to {get_dataset_record(dataset_slug)['label']} / {SOURCE_SECTION_LABELS[section]} as {destination.name}.", "success"),
+                message_block(f"Saved recording to {get_dataset_record(dataset_slug)['label']} / {SOURCE_SECTION_LABELS[section]} as {destination.name}.", "success", auto_dismiss=True),
                 build_file_summary_cards(rows),
                 build_dataset_banner(dataset_slug),
                 int(refresh_token or 0) + 1,
@@ -146,7 +146,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
             rows = list_audio_files(dataset_slug or default_active_dataset)
             active_slug = dataset_slug or default_active_dataset
             return (
-                message_block(str(exc), "danger"),
+                message_block(str(exc), "danger", auto_dismiss=True),
                 build_file_summary_cards(rows),
                 build_dataset_banner(active_slug),
                 int(refresh_token or 0),
@@ -204,7 +204,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         trigger = callback_context.triggered[0]["prop_id"].split(".")[0] if callback_context.triggered else None
         dataset_slug = active_dataset_slug or default_active_dataset
         dataset_label = get_dataset_record(dataset_slug)["label"]
-        message = message_block(f"{dataset_label} is ready for uploads and section moves.", "info")
+        message = message_block(f"{dataset_label} is ready for uploads and section moves.", "info", auto_dismiss=True)
         dataset_switch_request = no_update
         save_bundle_name_value = ""
         save_bundle_description_value = ""
@@ -225,7 +225,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
 
         try:
             if trigger == "active-dataset-dropdown":
-                message = message_block(f"Showing files from {dataset_label}.", "info")
+                message = message_block(f"Showing files from {dataset_label}.", "info", auto_dismiss=True)
             if trigger == "file-upload" and upload_contents:
                 upload_section, upload_group = parse_folder_key(selected_folder_key)
                 if not upload_section:
@@ -244,7 +244,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                     message_text += " Folder structure was preserved."
                 if skipped_count:
                     message_text += f" Skipped {skipped_count} unsupported file(s)."
-                message = message_block(message_text, "success")
+                message = message_block(message_text, "success", auto_dismiss=True)
             elif trigger == "create-folder-btn":
                 target_section, target_group = parse_folder_key(selected_folder_key)
                 if not target_section:
@@ -253,7 +253,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                 parent_label = SOURCE_SECTION_LABELS[target_section]
                 if target_group:
                     parent_label += f" / {target_group}"
-                message = message_block(f"Created folder '{created.name}' inside {dataset_label} / {parent_label}.", "success")
+                message = message_block(f"Created folder '{created.name}' inside {dataset_label} / {parent_label}.", "success", auto_dismiss=True)
             elif trigger == "delete-files-btn":
                 if not selected_file_ids and not selected_folder_targets:
                     current_section, current_group = parse_folder_key(selected_folder_key)
@@ -270,20 +270,20 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                     deleted_parts.append(f"{len(deleted_folders)} folder(s)")
                 if not deleted_parts:
                     raise ValueError("Select one or more files or a sub-folder before deleting. Root sections cannot be deleted.")
-                message = message_block(f"Deleted {' and '.join(deleted_parts)} from {dataset_label}.", "success")
+                message = message_block(f"Deleted {' and '.join(deleted_parts)} from {dataset_label}.", "success", auto_dismiss=True)
             elif trigger == "save-dataset-bundle-btn":
                 created = clone_dataset_bundle(dataset_slug, save_bundle_name or "", save_bundle_description or "")
                 dataset_switch_request = created["slug"]
-                message = message_block(f"Saved {dataset_label} as new dataset bundle '{created['label']}'.", "success")
+                message = message_block(f"Saved {dataset_label} as new dataset bundle '{created['label']}'.", "success", auto_dismiss=True)
             elif trigger == "delete-dataset-bundle-btn":
                 delete_target_slug = resolve_existing_dataset_slug(save_bundle_name) or dataset_slug
                 deleted = delete_dataset_bundle(delete_target_slug)
                 dataset_switch_request = deleted["slug"]
-                message = message_block(f"Deleted dataset bundle '{deleted['label']}'.", "success")
+                message = message_block(f"Deleted dataset bundle '{deleted['label']}'.", "success", auto_dismiss=True)
             elif trigger == "refresh-files-btn":
-                message = message_block(f"Refreshed {dataset_label}.", "info")
+                message = message_block(f"Refreshed {dataset_label}.", "info", auto_dismiss=True)
         except Exception as exc:
-            message = message_block(str(exc), "danger")
+            message = message_block(str(exc), "danger", auto_dismiss=True)
             save_bundle_name_value = save_bundle_name or ""
             save_bundle_description_value = save_bundle_description or ""
 

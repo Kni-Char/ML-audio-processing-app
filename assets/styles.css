@@ -979,6 +979,32 @@ textarea {
   color: var(--danger);
 }
 
+.message-auto-dismiss {
+  overflow: hidden;
+  max-height: 160px;
+  animation: message-auto-dismiss 5s ease forwards;
+}
+
+@keyframes message-auto-dismiss {
+  0%,
+  80% {
+    opacity: 1;
+    max-height: 160px;
+    margin-top: 14px;
+    padding: 14px 16px;
+  }
+
+  100% {
+    opacity: 0;
+    max-height: 0;
+    margin-top: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
+
 .upload-row {
   display: grid;
   gap: 16px;

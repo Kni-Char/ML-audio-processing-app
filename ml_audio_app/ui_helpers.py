@@ -9,8 +9,11 @@ from .plots import make_confusion_matrix_figure
 from .storage import get_dataset_record
 
 
-def message_block(message: str, tone: str = "info") -> html.Div:
-    return html.Div(message, className=f"message message-{tone}")
+def message_block(message: str, tone: str = "info", auto_dismiss: bool = False) -> html.Div:
+    class_name = f"message message-{tone}"
+    if auto_dismiss:
+        class_name += " message-auto-dismiss"
+    return html.Div(message, className=class_name)
 
 
 def make_columns(column_names: list[str]) -> list[dict[str, str]]:
