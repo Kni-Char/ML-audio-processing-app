@@ -189,22 +189,6 @@ def file_management_tab(default_dataset_slug: str) -> html.Div:
                         ],
                     ),
                     dataset_picker_block(default_dataset_slug),
-                    html.Div(
-                        id="file-management-progress-shell",
-                        className="processing-progress-shell",
-                        style={"display": "none"},
-                        children=[
-                            html.Div("Updating file manager", className="processing-progress-title"),
-                            html.Div(
-                                className="processing-progress-track",
-                                children=[html.Div(className="processing-progress-bar")],
-                            ),
-                            html.Div(
-                                "Applying uploads, folder changes, dataset bundle actions, and table refreshes.",
-                                className="muted-text processing-progress-note",
-                            ),
-                        ],
-                    ),
                     html.Div(id="file-management-message"),
                     html.Div(
                         className="file-manager-shell",

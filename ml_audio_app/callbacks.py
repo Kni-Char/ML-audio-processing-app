@@ -184,9 +184,6 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         State("file-manager-refresh-token", "data"),
         State("current-run-store", "data"),
         prevent_initial_call=True,
-        running=[
-            (Output("file-management-progress-shell", "style"), {"display": "grid"}, {"display": "none"}),
-        ],
     )
     def handle_file_actions(
         active_dataset_slug,

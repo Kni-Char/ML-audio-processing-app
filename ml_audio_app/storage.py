@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import shutil
 from collections import defaultdict
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Sequence
 
@@ -36,6 +38,34 @@ DATASET_LABEL_FALLBACKS = {
     DEFAULT_DATASET_SLUG: DEFAULT_DATASET_LABEL,
     EXAMPLE_DATASET_SLUG: EXAMPLE_DATASET_LABEL,
 }
+
+
+def clear_storage_caches() -> None:
+    read_dataset_metadata.cache_clear()
+    list_audio_files.cache_clear()
+    list_folder_records.cache_clear()
+    _summarize_dataset_record.cache_clear()
+    list_dataset_records.cache_clear()
+    list_dataset_options.cache_clear()
+    get_dataset_record.cache_clear()
+    list_run_file_rows.cache_clear()
+    list_run_artifacts.cache_clear()
+    get_latest_run_artifact.cache_clear()
+
+
+def _list_directories_only(root: Path) -> list[Path]:
+    directories: list[Path] = []
+    if not root.exists():
+        return directories
+
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        with os.scandir(current) as entries:
+            child_dirs = [Path(entry.path) for entry in entries if entry.is_dir()]
+        directories.extend(child_dirs)
+        stack.extend(child_dirs)
+    return sorted(directories, key=lambda item: item.as_posix().lower())
 
 
 def ensure_app_directories() -> None:
@@ -182,6 +212,7 @@ def ensure_dataset_directories(
         }
     )
     meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    clear_storage_caches()
 
 
 def humanize_dataset_slug(dataset_slug: str) -> str:
@@ -220,6 +251,7 @@ def migrate_legacy_train_test_sections(dataset_slug: str) -> None:
             pass
 
 
+@lru_cache(maxsize=64)
 def read_dataset_metadata(dataset_slug: str) -> dict:
     meta_file = dataset_meta_path(dataset_slug)
     if meta_file.exists():
@@ -238,6 +270,22 @@ def get_dataset_label(dataset_slug: str) -> str:
     return read_dataset_metadata(dataset_slug).get("label", humanize_dataset_slug(dataset_slug))
 
 
+@lru_cache(maxsize=64)
+def _summarize_dataset_record(dataset_slug: str) -> dict:
+    dataset_slug = slugify_dataset_name(dataset_slug)
+    meta = read_dataset_metadata(dataset_slug)
+    rows = list_audio_files(dataset_slug)
+    return {
+        "slug": dataset_slug,
+        "label": meta.get("label", humanize_dataset_slug(dataset_slug)),
+        "description": meta.get("description", ""),
+        "file_count": len(rows),
+        "group_count": len({(row["section_key"], row["group_key"]) for row in rows}),
+        "pooled_files": sum(1 for row in rows if row["section_key"] == "pooled"),
+        "validation_files": sum(1 for row in rows if row["section_key"] == "validation"),
+    }
+
+
 def get_default_dataset_slug() -> str:
     example_root = dataset_root(EXAMPLE_DATASET_SLUG)
     if example_root.exists():
@@ -245,6 +293,7 @@ def get_default_dataset_slug() -> str:
     return DEFAULT_DATASET_SLUG
 
 
+@lru_cache(maxsize=4)
 def list_dataset_records() -> list[dict]:
     ensure_app_directories()
     records: list[dict] = []
@@ -267,32 +316,21 @@ def list_dataset_records() -> list[dict]:
 
     for path in sorted(roots, key=sort_key):
         dataset_slug = path.name
-        meta = read_dataset_metadata(dataset_slug)
-        rows = list_audio_files(dataset_slug)
-        records.append(
-            {
-                "slug": dataset_slug,
-                "label": meta.get("label", humanize_dataset_slug(dataset_slug)),
-                "description": meta.get("description", ""),
-                "file_count": len(rows),
-                "group_count": len({(row["section_key"], row["group_key"]) for row in rows}),
-                "pooled_files": sum(1 for row in rows if row["section_key"] == "pooled"),
-                "validation_files": sum(1 for row in rows if row["section_key"] == "validation"),
-            }
-        )
+        records.append(_summarize_dataset_record(dataset_slug))
 
     return records
 
 
+@lru_cache(maxsize=4)
 def list_dataset_options() -> list[dict[str, str]]:
     return [{"label": record["label"], "value": record["slug"]} for record in list_dataset_records()]
 
 
+@lru_cache(maxsize=64)
 def get_dataset_record(dataset_slug: str) -> dict:
     dataset_slug = slugify_dataset_name(dataset_slug)
-    for record in list_dataset_records():
-        if record["slug"] == dataset_slug:
-            return record
+    if dataset_root(dataset_slug).exists():
+        return _summarize_dataset_record(dataset_slug)
     return {
         "slug": dataset_slug,
         "label": DATASET_LABEL_FALLBACKS.get(dataset_slug, humanize_dataset_slug(dataset_slug)),
@@ -357,6 +395,7 @@ def clone_dataset_bundle(
         label=clean_label,
         description=(target_description or "").strip() or source_meta.get("description", ""),
     )
+    clear_storage_caches()
     return {"slug": target_slug, "label": clean_label}
 
 
@@ -371,6 +410,7 @@ def delete_dataset_bundle(dataset_slug: str) -> dict[str, str]:
 
     bundle_label = get_dataset_label(source_slug)
     shutil.rmtree(source_root)
+    clear_storage_caches()
 
     fallback_slug = get_default_dataset_slug()
     ensure_dataset_directories(fallback_slug)
@@ -400,10 +440,12 @@ def list_audio_paths(dataset_slug: str, section: str) -> list[Path]:
     )
 
 
+@lru_cache(maxsize=64)
 def list_audio_files(dataset_slug: str) -> list[dict[str, str]]:
     if not dataset_root(dataset_slug).exists():
         return []
     rows: list[dict[str, str]] = []
+    dataset_label = get_dataset_label(dataset_slug)
 
     for section in SOURCE_SECTION_NAMES:
         root = section_dir(dataset_slug, section)
@@ -415,7 +457,7 @@ def list_audio_files(dataset_slug: str) -> list[dict[str, str]]:
                 {
                     "file_id": make_file_id(dataset_slug, section, relative_path),
                     "dataset_slug": dataset_slug,
-                    "dataset_label": get_dataset_label(dataset_slug),
+                    "dataset_label": dataset_label,
                     "section": SOURCE_SECTION_LABELS[section],
                     "section_key": section,
                     "group": group_key or "Root",
@@ -431,6 +473,7 @@ def list_audio_files(dataset_slug: str) -> list[dict[str, str]]:
     return rows
 
 
+@lru_cache(maxsize=64)
 def list_folder_records(dataset_slug: str) -> list[dict[str, str | int | bool]]:
     if not dataset_root(dataset_slug).exists():
         return []
@@ -455,7 +498,8 @@ def list_folder_records(dataset_slug: str) -> list[dict[str, str | int | bool]]:
     records: list[dict[str, str | int | bool]] = []
     for section in SOURCE_SECTION_NAMES:
         root = section_dir(dataset_slug, section)
-        directories = [root] + sorted([path for path in root.rglob("*") if path.is_dir()], key=lambda item: item.as_posix().lower())
+        directories = [root]
+        directories.extend(_list_directories_only(root))
         for directory in directories:
             group = "" if directory == root else directory.relative_to(root).as_posix()
             parent_group = ""
@@ -580,6 +624,8 @@ def save_uploaded_files(
         destination.write_bytes(decode_data_url(contents))
         saved.append(destination.relative_to(target_dir).as_posix())
 
+    if saved:
+        clear_storage_caches()
     return {"saved": saved, "skipped": skipped}
 
 
@@ -597,6 +643,7 @@ def create_subfolder(
     parent_dir.mkdir(parents=True, exist_ok=True)
     destination = deduplicate_directory(parent_dir / clean_folder_name)
     destination.mkdir(parents=True, exist_ok=False)
+    clear_storage_caches()
     return destination
 
 
@@ -630,6 +677,7 @@ def save_recording(
     target_dir.mkdir(parents=True, exist_ok=True)
     destination = deduplicate_path(target_dir / filename)
     destination.write_bytes(decode_data_url(data_url))
+    clear_storage_caches()
     return destination
 
 
@@ -663,6 +711,8 @@ def move_files(
         source.rename(destination)
         moved.append(destination.name)
 
+    if moved:
+        clear_storage_caches()
     return moved
 
 
@@ -685,6 +735,8 @@ def delete_files(file_ids: Iterable[str]) -> list[str]:
             path.unlink()
             deleted.append(path.name)
             _cleanup_empty_parents(path, section_dir(dataset_slug, section))
+    if deleted:
+        clear_storage_caches()
     return deleted
 
 
@@ -717,6 +769,8 @@ def delete_folders(dataset_slug: str, folder_keys: Iterable[tuple[str, str]]) ->
         shutil.rmtree(target)
         deleted.append(target.name)
 
+    if deleted:
+        clear_storage_caches()
     return deleted
 
 
@@ -725,6 +779,7 @@ def save_run_artifact(bundle: dict) -> Path:
     run_id = bundle["run_id"]
     destination = RUNS_ROOT / f"{run_id}.joblib"
     joblib.dump(bundle, destination)
+    clear_storage_caches()
     return destination
 
 
@@ -732,18 +787,29 @@ def load_run_artifact(run_path: str | Path) -> dict:
     return joblib.load(Path(run_path))
 
 
+def _infer_dataset_slug_from_run_name(path: Path) -> str:
+    match = re.match(r"^(?:run|eval)_(.+)_\d{8}_\d{6}$", path.stem)
+    if not match:
+        return ""
+    return slugify_dataset_name(match.group(1), default="")
+
+
 def _run_artifact_record(path: Path) -> dict[str, str] | None:
     modified = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
     label = path.stem
-    dataset_slug = ""
-    try:
-        bundle = load_run_artifact(path)
-        dataset_label = bundle.get("dataset_label")
-        dataset_slug = str(bundle.get("dataset_slug", "") or "")
-        if dataset_label:
-            label = f"{path.stem} | {dataset_label}"
-    except Exception:
-        pass
+    dataset_slug = _infer_dataset_slug_from_run_name(path)
+    dataset_label = get_dataset_label(dataset_slug) if dataset_slug else ""
+
+    if not dataset_label:
+        try:
+            bundle = load_run_artifact(path)
+            dataset_label = bundle.get("dataset_label")
+            dataset_slug = str(bundle.get("dataset_slug", "") or dataset_slug)
+        except Exception:
+            dataset_label = ""
+
+    if dataset_label:
+        label = f"{path.stem} | {dataset_label}"
 
     return {
         "label": f"{label} ({modified})",
@@ -753,6 +819,7 @@ def _run_artifact_record(path: Path) -> dict[str, str] | None:
     }
 
 
+@lru_cache(maxsize=64)
 def list_run_file_rows(dataset_slug: str | None = None) -> list[dict[str, str]]:
     ensure_app_directories()
     normalized_dataset = slugify_dataset_name(dataset_slug) if dataset_slug else None
@@ -777,6 +844,7 @@ def list_run_file_rows(dataset_slug: str | None = None) -> list[dict[str, str]]:
     return rows
 
 
+@lru_cache(maxsize=64)
 def list_run_artifacts(dataset_slug: str | None = None) -> list[dict[str, str]]:
     ensure_app_directories()
     options: list[dict[str, str]] = []
@@ -793,6 +861,7 @@ def list_run_artifacts(dataset_slug: str | None = None) -> list[dict[str, str]]:
     return options
 
 
+@lru_cache(maxsize=64)
 def get_latest_run_artifact(dataset_slug: str | None = None) -> dict[str, str] | None:
     records = list_run_artifacts(dataset_slug)
     if not records:
@@ -807,4 +876,6 @@ def delete_run_artifacts(run_paths: Iterable[str]) -> list[str]:
         if path.exists() and path.is_file():
             path.unlink()
             deleted.append(path.name)
+    if deleted:
+        clear_storage_caches()
     return deleted
