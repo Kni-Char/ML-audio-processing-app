@@ -183,10 +183,6 @@
   }
 
   function handleUploadDragOver(event) {
-    if (!isRootMode()) {
-      return;
-    }
-
     event.preventDefault();
     event.stopPropagation();
     if (event.dataTransfer) {
@@ -195,12 +191,18 @@
   }
 
   function handleUploadDrop(event) {
-    if (!isRootMode()) {
-      return;
-    }
-
     event.preventDefault();
     event.stopPropagation();
+
+    if (!isRootMode()) {
+      const droppedFiles = Array.from((event.dataTransfer && event.dataTransfer.files) || []);
+      const relativePaths = droppedFiles.map(function (file) {
+        return file.webkitRelativePath || file.name;
+      });
+      setDashValue("file-upload-relative-paths", JSON.stringify(relativePaths));
+      syncFilesToDashInput(droppedFiles);
+      return;
+    }
 
     const items = Array.from((event.dataTransfer && event.dataTransfer.items) || []);
     const entries = items

@@ -514,6 +514,11 @@ def save_uploaded_files(
     if not contents_list or not filenames:
         return {"saved": [], "skipped": []}
 
+    normalized_contents = [contents_list] if isinstance(contents_list, str) else list(contents_list)
+    normalized_filenames = [filenames] if isinstance(filenames, str) else list(filenames)
+    if not normalized_contents or not normalized_filenames:
+        return {"saved": [], "skipped": []}
+
     saved: list[str] = []
     skipped: list[str] = []
     group_path = normalize_group_path(group)
@@ -540,7 +545,7 @@ def save_uploaded_files(
                     for path in normalized_relative_paths
                 ]
 
-    for index, (contents, filename) in enumerate(zip(contents_list, filenames)):
+    for index, (contents, filename) in enumerate(zip(normalized_contents, normalized_filenames)):
         if not is_allowed_audio_file(filename):
             skipped.append(filename)
             continue
