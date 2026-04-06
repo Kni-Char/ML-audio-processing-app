@@ -190,6 +190,18 @@ label,
   margin-left: 4px;
 }
 
+.file-manager-bundle-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(92px, 1fr);
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.file-manager-bundle-save,
+.file-manager-bundle-delete {
+  width: 100%;
+}
+
 .file-manager-dropzone {
   margin-top: 10px;
   padding: 20px 14px;

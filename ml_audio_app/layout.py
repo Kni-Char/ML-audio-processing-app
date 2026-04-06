@@ -137,6 +137,26 @@ def dataset_picker_block(default_dataset_slug: str) -> html.Div:
                 "Switch datasets here to browse, process, and demo different collections.",
                 className="muted-text",
             ),
+            dcc.Input(
+                id="save-bundle-name",
+                type="text",
+                value="",
+                placeholder="New dataset bundle name",
+                className="control",
+            ),
+            dcc.Textarea(
+                id="save-bundle-description",
+                value="",
+                placeholder="Optional description",
+                className="control control-textarea",
+            ),
+            html.Div(
+                className="file-manager-bundle-actions",
+                children=[
+                    html.Button("Save Dataset Bundle", id="save-dataset-bundle-btn", n_clicks=0, className="button button-secondary file-manager-bundle-save"),
+                    html.Button("Delete", id="delete-dataset-bundle-btn", n_clicks=0, className="button button-danger file-manager-bundle-delete"),
+                ],
+            ),
         ],
     )
 
@@ -169,26 +189,6 @@ def file_management_tab(default_dataset_slug: str) -> html.Div:
                         ],
                     ),
                     dataset_picker_block(default_dataset_slug),
-                    html.Div(
-                        className="file-manager-sidebar-card",
-                        children=[
-                            html.Div("Save current dataset as bundle", className="file-manager-sidebar-title"),
-                            dcc.Input(
-                                id="save-bundle-name",
-                                type="text",
-                                value="",
-                                placeholder="New dataset bundle name",
-                                className="control",
-                            ),
-                            dcc.Textarea(
-                                id="save-bundle-description",
-                                value="",
-                                placeholder="Optional description",
-                                className="control control-textarea",
-                            ),
-                            html.Button("Save Dataset Bundle", id="save-dataset-bundle-btn", n_clicks=0, className="button button-secondary file-manager-create-button"),
-                        ],
-                    ),
                     html.Div(id="attached-run-status-file", children=build_attached_run_status(default_dataset_slug, current_run)),
                     html.Div(id="file-management-message"),
                     html.Div(

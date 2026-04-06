@@ -290,8 +290,34 @@ def get_dataset_record(dataset_slug: str) -> dict:
     for record in list_dataset_records():
         if record["slug"] == dataset_slug:
             return record
-    ensure_dataset_directories(dataset_slug)
-    return next(record for record in list_dataset_records() if record["slug"] == dataset_slug)
+    return {
+        "slug": dataset_slug,
+        "label": DATASET_LABEL_FALLBACKS.get(dataset_slug, humanize_dataset_slug(dataset_slug)),
+        "description": "",
+        "file_count": 0,
+        "group_count": 0,
+        "pooled_files": 0,
+        "validation_files": 0,
+    }
+
+
+def resolve_existing_dataset_slug(name_or_slug: str | None) -> str | None:
+    raw = (name_or_slug or "").strip()
+    if not raw:
+        return None
+
+    slug_candidate = slugify_dataset_name(raw)
+    records = list_dataset_records()
+    for record in records:
+        if record["slug"] == slug_candidate:
+            return record["slug"]
+
+    lower_label = raw.lower()
+    for record in records:
+        if str(record["label"]).strip().lower() == lower_label:
+            return record["slug"]
+
+    return None
 
 
 def _deduplicate_dataset_slug(preferred_slug: str) -> str:
@@ -331,6 +357,23 @@ def clone_dataset_bundle(
     return {"slug": target_slug, "label": clean_label}
 
 
+def delete_dataset_bundle(dataset_slug: str) -> dict[str, str]:
+    source_slug = slugify_dataset_name(dataset_slug)
+    if source_slug in {DEFAULT_DATASET_SLUG, EXAMPLE_DATASET_SLUG}:
+        raise ValueError("Protected dataset bundles cannot be deleted.")
+
+    source_root = dataset_root(source_slug)
+    if not source_root.exists():
+        raise ValueError(f"Dataset bundle '{source_slug}' does not exist.")
+
+    bundle_label = get_dataset_label(source_slug)
+    shutil.rmtree(source_root)
+
+    fallback_slug = get_default_dataset_slug()
+    ensure_dataset_directories(fallback_slug)
+    return {"slug": fallback_slug, "label": bundle_label}
+
+
 def make_file_id(dataset_slug: str, section: str, relative_path: str) -> str:
     return f"{slugify_dataset_name(dataset_slug)}|{canonical_source_section(section)}|{sanitize_relative_audio_path(relative_path)}"
 
@@ -355,7 +398,8 @@ def list_audio_paths(dataset_slug: str, section: str) -> list[Path]:
 
 
 def list_audio_files(dataset_slug: str) -> list[dict[str, str]]:
-    ensure_dataset_directories(dataset_slug)
+    if not dataset_root(dataset_slug).exists():
+        return []
     rows: list[dict[str, str]] = []
 
     for section in SOURCE_SECTION_NAMES:
@@ -385,7 +429,8 @@ def list_audio_files(dataset_slug: str) -> list[dict[str, str]]:
 
 
 def list_folder_records(dataset_slug: str) -> list[dict[str, str | int | bool]]:
-    ensure_dataset_directories(dataset_slug)
+    if not dataset_root(dataset_slug).exists():
+        return []
     audio_rows = list_audio_files(dataset_slug)
     counts: dict[tuple[str, str], int] = defaultdict(int)
     modified_lookup: dict[tuple[str, str], str] = {}

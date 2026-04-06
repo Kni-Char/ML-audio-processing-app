@@ -17,6 +17,7 @@ from .plots import (
 from .storage import (
     build_recording_name,
     clone_dataset_bundle,
+    delete_dataset_bundle,
     delete_folders,
     create_subfolder,
     delete_files,
@@ -27,6 +28,7 @@ from .storage import (
     list_folder_records,
     list_run_artifacts,
     load_run_artifact,
+    resolve_existing_dataset_slug,
     resolve_audio_path,
     save_recording,
     save_run_artifact,
@@ -163,6 +165,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         Input("create-folder-btn", "n_clicks"),
         Input("delete-files-btn", "n_clicks"),
         Input("save-dataset-bundle-btn", "n_clicks"),
+        Input("delete-dataset-bundle-btn", "n_clicks"),
         State("file-upload", "filename"),
         State("file-upload-relative-paths", "value"),
         State("selected-folder-store", "data"),
@@ -182,6 +185,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         _create_folder_clicks,
         _delete_clicks,
         _save_bundle_clicks,
+        _delete_bundle_clicks,
         upload_filenames,
         upload_relative_paths_raw,
         selected_folder_key,
@@ -267,6 +271,11 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                 created = clone_dataset_bundle(dataset_slug, save_bundle_name or "", save_bundle_description or "")
                 dataset_switch_request = created["slug"]
                 message = message_block(f"Saved {dataset_label} as new dataset bundle '{created['label']}'.", "success")
+            elif trigger == "delete-dataset-bundle-btn":
+                delete_target_slug = resolve_existing_dataset_slug(save_bundle_name) or dataset_slug
+                deleted = delete_dataset_bundle(delete_target_slug)
+                dataset_switch_request = deleted["slug"]
+                message = message_block(f"Deleted dataset bundle '{deleted['label']}'.", "success")
             elif trigger == "refresh-files-btn":
                 message = message_block(f"Refreshed {dataset_label}.", "info")
         except Exception as exc:
@@ -274,11 +283,12 @@ def register_callbacks(app, default_active_dataset: str) -> None:
             save_bundle_name_value = save_bundle_name or ""
             save_bundle_description_value = save_bundle_description or ""
 
-        rows = list_audio_files(dataset_slug)
+        summary_dataset_slug = dataset_switch_request if isinstance(dataset_switch_request, str) and dataset_switch_request else dataset_slug
+        rows = list_audio_files(summary_dataset_slug)
         return (
             message,
             build_file_summary_cards(rows),
-            build_dataset_banner(dataset_slug),
+            build_dataset_banner(summary_dataset_slug),
             int(refresh_token or 0) + 1,
             "",
             "",
@@ -291,10 +301,11 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         Output("active-dataset-dropdown", "options"),
         Output("active-dataset-dropdown", "value", allow_duplicate=True),
         Input("dataset-switch-request", "data"),
+        Input("file-manager-refresh-token", "data"),
         State("active-dataset-dropdown", "value"),
         prevent_initial_call=True,
     )
-    def refresh_dataset_options_after_save(dataset_switch_request, current_dataset_slug):
+    def refresh_dataset_options_after_save(dataset_switch_request, _refresh_token, current_dataset_slug):
         options = list_dataset_options()
         option_values = {option["value"] for option in options}
         next_value = (
