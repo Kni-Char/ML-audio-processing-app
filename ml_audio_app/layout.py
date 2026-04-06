@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from dash import dash_table, dcc, html
 
-from .config import DEFAULT_BAD_HITS, DEFAULT_RECORDING_PREFIX, DEFAULT_TRAIN_RATIO, SOURCE_SECTION_LABELS, SOURCE_SECTION_NAMES
-from .storage import get_latest_run_artifact, list_audio_files, list_dataset_options, list_folder_records, list_run_artifacts
+from .config import DEFAULT_BAD_HITS, DEFAULT_DELTA_LIST, DEFAULT_GOOD_HITS, DEFAULT_RECORDING_PREFIX, DEFAULT_TRAIN_RATIO, SOURCE_SECTION_LABELS, SOURCE_SECTION_NAMES
+from .storage import get_latest_run_artifact, list_audio_files, list_dataset_options, list_folder_records, list_run_artifacts, list_run_file_rows
 from .ui_helpers import (
-    build_attached_run_status,
     build_browser_rows,
     build_dataset_banner,
     build_file_summary_cards,
     build_file_tree,
+    build_results_banner,
     list_available_folder_keys,
     message_block,
 )
@@ -105,14 +105,14 @@ def studio_tab(default_dataset_slug: str) -> html.Div:
                     ),
                     html.Div(id="recording-filename-preview", className="filename-preview"),
                     html.Div(
-                        className="button-row",
+                        className="button-row wrap studio-recording-actions",
                         children=[
                             html.Button("⏺ Start Recording (click again to stop)", id="record-toggle-btn", n_clicks=0, className="button button-primary"),
                             html.Button("Clear Recording", id="record-clear-btn", n_clicks=0, className="button button-secondary"),
                             html.Button("Save Recording", id="save-recording-btn", n_clicks=0, className="button button-accent"),
                         ],
                     ),
-                    html.Div(id="recording-status", className="muted-text", children="Microphone is idle."),
+                    html.Div(id="recording-status", className="muted-text studio-recording-status", children="Microphone is idle."),
                     html.Audio(id="recording-preview-audio", controls=True, className="audio-player"),
                     dcc.Textarea(id="recording-data", style={"display": "none"}),
                     html.Div(id="studio-message"),
@@ -167,7 +167,7 @@ def file_management_tab(default_dataset_slug: str) -> html.Div:
     latest_run = get_latest_run_artifact(default_dataset_slug)
     current_run = {"artifact_path": latest_run["value"], "load_mode": "attached_saved"} if latest_run else None
     initial_folder_key = list_available_folder_keys(folder_records)[0] if folder_records else None
-    initial_browser_rows = build_browser_rows(rows, folder_records, initial_folder_key)
+    initial_browser_rows = build_browser_rows(rows, folder_records, initial_folder_key, list_run_file_rows(default_dataset_slug))
     return html.Div(
         className="tab-content",
         children=[
@@ -189,7 +189,22 @@ def file_management_tab(default_dataset_slug: str) -> html.Div:
                         ],
                     ),
                     dataset_picker_block(default_dataset_slug),
-                    html.Div(id="attached-run-status-file", children=build_attached_run_status(default_dataset_slug, current_run)),
+                    html.Div(
+                        id="file-management-progress-shell",
+                        className="processing-progress-shell",
+                        style={"display": "none"},
+                        children=[
+                            html.Div("Updating file manager", className="processing-progress-title"),
+                            html.Div(
+                                className="processing-progress-track",
+                                children=[html.Div(className="processing-progress-bar")],
+                            ),
+                            html.Div(
+                                "Applying uploads, folder changes, dataset bundle actions, and table refreshes.",
+                                className="muted-text processing-progress-note",
+                            ),
+                        ],
+                    ),
                     html.Div(id="file-management-message"),
                     html.Div(
                         className="file-manager-shell",
@@ -220,7 +235,7 @@ def file_management_tab(default_dataset_slug: str) -> html.Div:
                                         className="file-manager-main",
                                         children=[
                                             html.Div(
-                                                className="button-row",
+                                                className="button-row wrap file-manager-action-row",
                                                 children=[
                                                     html.Button("Delete Selected", id="delete-files-btn", n_clicks=0, className="button button-danger"),
                                                     html.Button("Select / Deselect All", id="toggle-select-all-btn", n_clicks=0, className="button button-secondary"),
@@ -262,8 +277,10 @@ def file_management_tab(default_dataset_slug: str) -> html.Div:
                                                 style_data_conditional=[
                                                     {"if": {"state": "selected"}, "backgroundColor": "rgba(37, 99, 235, 0.08)", "border": "1px solid rgba(37, 99, 235, 0.18)"},
                                                     {"if": {"filter_query": "{row_type} = \"folder\""}, "fontWeight": "700", "color": "#0f766e"},
+                                                    {"if": {"filter_query": "{row_type} = \"run\""}, "fontWeight": "700", "color": "#35506e"},
                                                     {"if": {"filter_query": "{row_type} = \"back\""}, "color": "#2563eb", "fontWeight": "700"},
                                                     {"if": {"filter_query": "{row_type} = \"folder\"", "column_id": "name"}, "paddingLeft": "18px"},
+                                                    {"if": {"filter_query": "{row_type} = \"run\"", "column_id": "name"}, "paddingLeft": "18px"},
                                                     {"if": {"filter_query": "{row_type} = \"back\"", "column_id": "name"}, "paddingLeft": "18px"},
                                                 ],
                                             ),
@@ -433,7 +450,8 @@ def processing_tab(default_dataset_slug: str) -> html.Div:
                                                 className="numeric-grid",
                                                 children=[
                                                     html.Div(children=[html.Label("Training Ratio"), dcc.Input(id="train-ratio", type="number", value=DEFAULT_TRAIN_RATIO, step=0.05, min=0.1, max=0.9, className="control")]),
-                                                    html.Div(children=[html.Label("Bad Hits per Recording"), dcc.Input(id="bad-hits", type="number", value=DEFAULT_BAD_HITS, step=1, min=1, className="control")]),
+                                                    html.Div(children=[html.Label("Expected Good/ Healthy Hits"), dcc.Input(id="good-hits", type="number", value=DEFAULT_GOOD_HITS, step=1, min=1, className="control")]),
+                                                    html.Div(children=[html.Label("Expected Bad/ Unhealthy Hits"), dcc.Input(id="bad-hits", type="number", value=DEFAULT_BAD_HITS, step=1, min=1, className="control")]),
                                                     html.Div(children=[html.Label("Pre Window (s)"), dcc.Input(id="pre-sec", type="number", value=0.02, step=0.01, className="control")]),
                                                     html.Div(children=[html.Label("Post Window (s)"), dcc.Input(id="post-sec", type="number", value=0.20, step=0.01, className="control")]),
                                                     html.Div(children=[html.Label("Min Gap (s)"), dcc.Input(id="min-gap-sec", type="number", value=0.04, step=0.01, className="control")]),
@@ -460,7 +478,7 @@ def processing_tab(default_dataset_slug: str) -> html.Div:
                                                     html.Label("Adaptive Delta List"),
                                                     dcc.Textarea(
                                                         id="delta-list",
-                                                        value="0.20, 0.15, 0.12, 0.10, 0.08, 0.06, 0.05, 0.04",
+                                                        value=", ".join(f"{delta:.2f}" for delta in DEFAULT_DELTA_LIST),
                                                         className="control control-textarea",
                                                     ),
                                                 ],
@@ -483,8 +501,7 @@ def results_tab(default_dataset_slug: str) -> html.Div:
     return html.Div(
         className="tab-content",
         children=[
-            html.Div(id="attached-run-status-results", children=build_attached_run_status(default_dataset_slug, current_run)),
-            html.Div(id="run-banner-container", children=message_block("Run the pipeline to populate analysis outputs.", "info")),
+            html.Div(id="run-banner-container", children=build_results_banner(default_dataset_slug, current_run)),
             html.Div(
                 className="panel",
                 children=[
@@ -492,7 +509,7 @@ def results_tab(default_dataset_slug: str) -> html.Div:
                         className="panel-heading",
                         children=[
                             html.H2("Signal Preview"),
-                            html.P("Inspect a single recording with waveform, preprocessing, onset detection, and clip durations."),
+                            html.P("Inspect a single recording with waveform, preprocessing, onset detection, and spectrogram views."),
                         ],
                     ),
                     dcc.Dropdown(id="preview-file-dropdown", placeholder="Select a file from the train/test pool or validation"),
@@ -505,7 +522,6 @@ def results_tab(default_dataset_slug: str) -> html.Div:
                             dcc.Graph(id="processed-waveform-graph"),
                             dcc.Graph(id="onset-graph"),
                             dcc.Graph(id="spectrogram-graph"),
-                            dcc.Graph(id="clip-lengths-graph"),
                         ],
                     ),
                 ],
@@ -554,7 +570,7 @@ def results_tab(default_dataset_slug: str) -> html.Div:
                         className="panel-heading",
                         children=[
                             html.H2("Section Diagnostics"),
-                            html.P("See how many hits were found versus expected for each source file."),
+                            html.P("Compare detected versus expected hits for each source file and review any processing errors."),
                         ],
                     ),
                     dash_table.DataTable(

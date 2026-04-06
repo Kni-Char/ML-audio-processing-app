@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from .config import DEFAULT_DELTA_LIST
 from .pipeline import ExperimentConfig, PreprocessingConfig, SplitConfig
 
 
 def parse_delta_list(raw_value: str) -> list[float]:
     raw_value = raw_value or ""
     if not raw_value.strip():
-        return [0.20, 0.15, 0.12, 0.10, 0.08, 0.06, 0.05, 0.04]
+        return list(DEFAULT_DELTA_LIST)
     values = []
     for token in raw_value.split(","):
         values.append(float(token.strip()))
@@ -19,6 +20,7 @@ def build_experiment_config(
     highcut_hz: float,
     filter_order: int,
     train_ratio: float,
+    good_hits: int,
     pre_sec: float,
     post_sec: float,
     min_gap_sec: float,
@@ -49,6 +51,7 @@ def build_experiment_config(
         preprocessing=preprocessing,
         split=split,
         train_ratio=float(train_ratio),
+        good_hits=int(good_hits),
         bad_hits=int(bad_hits),
         selected_models=list(selected_models or []),
         selected_feature_sets=list(selected_feature_sets or []),

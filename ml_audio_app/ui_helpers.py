@@ -6,7 +6,7 @@ from dash import dcc, html
 
 from .config import DEFAULT_DATASET_LABEL, SECTION_LABELS, SECTION_NAMES, SOURCE_SECTION_LABELS, SOURCE_SECTION_NAMES
 from .plots import make_confusion_matrix_figure
-from .storage import get_dataset_record
+from .storage import RUNS_SECTION_KEY, RUNS_SECTION_LABEL, get_dataset_record
 
 
 def message_block(message: str, tone: str = "info", auto_dismiss: bool = False) -> html.Div:
@@ -81,17 +81,17 @@ def parse_folder_key(folder_key: str | None) -> tuple[str | None, str]:
 
 
 def list_available_folder_keys(folder_records: list[dict]) -> list[str]:
+    section_order = {section: index for index, section in enumerate((*SOURCE_SECTION_NAMES, RUNS_SECTION_KEY))}
     keys: list[str] = []
-    for section in SOURCE_SECTION_NAMES:
-        section_records = [record for record in folder_records if record["section_key"] == section]
-        if not section_records:
-            continue
-        keys.extend(
-            [
-                make_folder_key(str(record["section_key"]), str(record["group_key"] or ""))
-                for record in sorted(section_records, key=lambda item: (str(item["group_key"] or "").count("/"), str(item["group_key"] or "").lower()))
-            ]
-        )
+    for record in sorted(
+        folder_records,
+        key=lambda item: (
+            section_order.get(str(item["section_key"]), 99),
+            str(item["group_key"] or "").count("/"),
+            str(item["group_key"] or "").lower(),
+        ),
+    ):
+        keys.append(make_folder_key(str(record["section_key"]), str(record["group_key"] or "")))
     return keys
 
 
@@ -161,10 +161,29 @@ def describe_folder_selection(rows: list[dict], folder_key: str | None, search_t
     return title, subtitle
 
 
-def build_browser_rows(rows: list[dict], folder_records: list[dict], folder_key: str | None, search_term: str = "") -> list[dict]:
+def build_browser_rows(rows: list[dict], folder_records: list[dict], folder_key: str | None, run_rows: list[dict] | None = None, search_term: str = "") -> list[dict]:
     section, group = parse_folder_key(folder_key)
     if not section:
         return []
+
+    if section == RUNS_SECTION_KEY:
+        browser_rows: list[dict] = []
+        visible_runs = list(run_rows or [])
+        query = (search_term or "").strip().lower()
+        if query:
+            visible_runs = [row for row in visible_runs if query in str(row["name"]).lower()]
+        for row in visible_runs:
+            browser_rows.append(
+                {
+                    "name": f"[Run] {row['name']}",
+                    "size_kb": row["size_kb"],
+                    "modified": row["modified"],
+                    "row_type": "run",
+                    "nav_key": "",
+                    "file_id": row["artifact_path"],
+                }
+            )
+        return browser_rows
 
     prefix = group.strip()
     query = (search_term or "").strip().lower()
@@ -258,9 +277,12 @@ def build_file_tree(rows: list[dict], selected_folder_key: str | None = None) ->
     if not rows:
         return html.Div("No audio files in this dataset yet.", className="muted-text")
 
-    grouped: dict[str, list[dict]] = {section: [] for section in SOURCE_SECTION_NAMES}
+    grouped: dict[str, list[dict]] = {section: [] for section in (*SOURCE_SECTION_NAMES, RUNS_SECTION_KEY)}
     for record in rows:
         grouped.setdefault(str(record["section_key"]), []).append(record)
+
+    section_order = (*SOURCE_SECTION_NAMES, RUNS_SECTION_KEY)
+    section_labels = {**SOURCE_SECTION_LABELS, RUNS_SECTION_KEY: RUNS_SECTION_LABEL}
 
     def render_child_nodes(section: str, section_records: list[dict], parent_group: str) -> list[html.Div]:
         nodes: list[html.Div] = []
@@ -293,7 +315,7 @@ def build_file_tree(rows: list[dict], selected_folder_key: str | None = None) ->
         return nodes
 
     section_nodes: list[html.Div] = []
-    for section in SOURCE_SECTION_NAMES:
+    for section in section_order:
         section_records = grouped.get(section, [])
         if not section_records:
             continue
@@ -314,7 +336,7 @@ def build_file_tree(rows: list[dict], selected_folder_key: str | None = None) ->
                         className=f"file-nav-node file-nav-node-section{' is-selected' if selected_folder_key == section_key else ''}",
                         children=[
                             html.Span(className="file-nav-glyph"),
-                            html.Span(SOURCE_SECTION_LABELS[section], className="file-nav-label"),
+                            html.Span(section_labels[section], className="file-nav-label"),
                             html.Span(f"{section_files}", className="file-nav-count"),
                         ],
                     ),
@@ -326,7 +348,7 @@ def build_file_tree(rows: list[dict], selected_folder_key: str | None = None) ->
     return html.Div(
         className="file-nav-shell",
         children=[
-            html.Div("Dataset folders", className="file-nav-heading"),
+            html.Div("Dataset items", className="file-nav-heading"),
             html.Div(section_nodes, className="file-nav-tree"),
         ],
     )
@@ -357,10 +379,54 @@ def build_attached_run_status(dataset_slug: str, current_run: dict | None = None
     )
 
 
-def build_run_banner(bundle: dict, current_run: dict | None = None) -> html.Div:
+def build_results_context_status(dataset_slug: str, current_run: dict | None = None) -> html.Div:
+    dataset = get_dataset_record(dataset_slug)
+    artifact_path = (current_run or {}).get("artifact_path")
+    run_id = (current_run or {}).get("run_id")
+    load_mode = (current_run or {}).get("load_mode")
+
+    if artifact_path:
+        mode_text = "Attached saved run ready" if load_mode == "attached_saved" else "Latest session run ready"
+        detail_text = run_id or "Saved model bundle selected"
+        tone = "ready"
+    else:
+        mode_text = "No attached run yet"
+        detail_text = "Train once on this dataset to cache a reusable model bundle."
+        tone = "empty"
+
+    dataset_summary = (
+        f"Files: {dataset['file_count']} | Groups: {dataset['group_count']} | "
+        f"Pool: {dataset['pooled_files']} | Validation: {dataset['validation_files']}"
+    )
+
+    return html.Div(
+        className=f"status-badge status-badge-{tone}",
+        children=[
+            html.Div(dataset["label"], className="status-badge-title"),
+            html.Div(mode_text, className="status-badge-mode"),
+            html.Div(dataset_summary, className="status-badge-meta status-badge-summary"),
+            html.Div(detail_text, className="status-badge-meta"),
+        ],
+    )
+
+
+def build_results_banner(dataset_slug: str, current_run: dict | None = None, bundle: dict | None = None) -> html.Div:
+    dataset = get_dataset_record(dataset_slug)
+    bundle = bundle or {}
+    artifact_path = (current_run or {}).get("artifact_path")
+
+    dataset_summary = (
+        f"Files: {dataset['file_count']} | Groups: {dataset['group_count']} | "
+        f"Pool: {dataset['pooled_files']} | Validation: {dataset['validation_files']}"
+    )
+
+    run_text = (current_run or {}).get("run_id") or bundle.get("run_id") or "Saved model bundle selected"
+    if not artifact_path:
+        run_text = "Train once on this dataset to cache a reusable model bundle."
+
+    top_text = "Run the pipeline to populate analysis outputs."
     results = bundle.get("results_table", [])
     top_row = results[0] if results else None
-    top_text = "No model results yet."
     if top_row:
         top_text = (
             f"Best validation accuracy: {top_row['feature_set']} | {top_row['model']} "
@@ -371,22 +437,14 @@ def build_run_banner(bundle: dict, current_run: dict | None = None) -> html.Div:
     if bundle.get("mode") == "loaded-evaluation" and bundle.get("source_run_id"):
         source_text = f" | Evaluated from saved run {bundle['source_run_id']}"
 
-    dataset_text = bundle.get("dataset_label") or DEFAULT_DATASET_LABEL
-    load_mode = (current_run or {}).get("load_mode")
-    if load_mode == "attached_saved":
-        mode_text = "Attached Saved Run"
-    elif load_mode == "trained_now":
-        mode_text = "Trained In Session"
-    else:
-        mode_text = bundle.get("mode", "idle").replace("-", " ").title()
-
     return html.Div(
         className="run-banner",
         children=[
-            html.Div(f"Current run: {bundle.get('run_id', 'None')}", className="run-banner-title"),
+            html.Div(dataset["label"], className="status-badge-title"),
+            html.Div(dataset_summary, className="status-badge-meta status-badge-summary"),
             html.Div(
-                f"{mode_text} | Dataset: {dataset_text}{source_text}",
-                className="run-banner-mode",
+                f"Current run: {run_text}{source_text}" if artifact_path else run_text,
+                className="run-banner-title",
             ),
             html.Div(top_text, className="run-banner-meta"),
         ],
@@ -395,11 +453,37 @@ def build_run_banner(bundle: dict, current_run: dict | None = None) -> html.Div:
 
 def flatten_diagnostics(bundle: dict) -> list[dict]:
     rows: list[dict] = []
+    ordered_keys = [
+        "section",
+        "group",
+        "relative_path",
+        "source_file",
+        "label",
+        "found_hits",
+        "expected_hits",
+        "status",
+        "split_role",
+        "delta_used",
+        "duration_sec",
+        "error",
+    ]
     for section in SECTION_NAMES:
         for row in bundle.get("section_diagnostics", {}).get(section, []):
-            merged = {"section": SECTION_LABELS[section]}
-            merged.update(row)
-            rows.append(merged)
+            merged = {
+                "section": SECTION_LABELS[section],
+                "group": row.get("group", ""),
+                "relative_path": row.get("relative_path", ""),
+                "source_file": row.get("source_file", ""),
+                "label": row.get("label", ""),
+                "found_hits": row.get("found_hits", "n/a") if row.get("found_hits", "") != "" else "n/a",
+                "expected_hits": row.get("expected_hits", "n/a") if row.get("expected_hits", "") != "" else "n/a",
+                "status": row.get("status", ""),
+                "split_role": row.get("split_role", section),
+                "delta_used": row.get("delta_used", "n/a") if row.get("delta_used", "") != "" else "n/a",
+                "duration_sec": row.get("duration_sec", "n/a") if row.get("duration_sec", "") != "" else "n/a",
+                "error": row.get("error") or "None",
+            }
+            rows.append({key: merged.get(key, "") for key in ordered_keys})
     return rows
 
 

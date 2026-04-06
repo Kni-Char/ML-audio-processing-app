@@ -75,10 +75,25 @@ label,
 }
 
 .dataset-picker {
+  display: grid;
+  gap: 12px;
   padding: 18px;
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.72);
   border: 1px solid rgba(15, 118, 110, 0.12);
+}
+
+.dataset-picker label {
+  margin-bottom: 2px;
+}
+
+.dataset-picker .muted-text {
+  margin: -2px 0 2px;
+  line-height: 1.45;
+}
+
+.dataset-picker .control {
+  margin: 0;
 }
 
 .eyebrow {
@@ -194,7 +209,7 @@ label,
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(92px, 1fr);
   gap: 10px;
-  margin-top: 10px;
+  margin-top: 4px;
 }
 
 .file-manager-bundle-save,
@@ -210,6 +225,11 @@ label,
 .file-manager-main {
   padding: 16px;
   background: rgba(255, 255, 255, 0.9);
+}
+
+.file-manager-action-row {
+  margin-bottom: 18px;
+  row-gap: 12px;
 }
 
 .file-manager-upload-panel {
@@ -440,6 +460,10 @@ label,
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
+.form-grid > div {
+  min-width: 0;
+}
+
 .form-grid.two-column {
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
 }
@@ -539,7 +563,9 @@ textarea {
 }
 
 .processing-progress-shell {
+  display: grid;
   gap: 10px;
+  margin-bottom: 16px;
   padding: 16px 18px;
   border-radius: var(--radius-md);
   border: 1px solid rgba(15, 118, 110, 0.18);
@@ -583,6 +609,7 @@ textarea {
 .processing-progress-note {
   margin: 0;
 }
+
 
 @keyframes processing-loader-slide {
   0% {
@@ -650,6 +677,16 @@ textarea {
   border-radius: var(--radius-md);
 }
 
+.studio-recording-actions {
+  margin-top: 18px;
+  row-gap: 14px;
+}
+
+.studio-recording-status {
+  margin-top: 12px;
+  line-height: 1.5;
+}
+
 .status-badge {
   margin: 10px 0 16px;
   padding: 14px 16px;
@@ -685,6 +722,12 @@ textarea {
 .status-badge-meta {
   margin-top: 4px;
   color: var(--muted);
+}
+
+.status-badge-summary {
+  margin-top: 8px;
+  font-weight: 600;
+  color: #35506e;
 }
 
 .file-tree-shell {
@@ -1032,7 +1075,8 @@ textarea {
 
 .audio-player {
   width: 100%;
-  margin-top: 14px;
+  display: block;
+  margin-top: 18px;
 }
 
 .inline-options label,

@@ -25,7 +25,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 
-from .config import DEFAULT_BAD_HITS, DEFAULT_TRAIN_RATIO, GOOD_HITS, PROCESSED_ROOT, SECTION_NAMES
+from .config import DEFAULT_BAD_HITS, DEFAULT_DELTA_LIST, DEFAULT_GOOD_HITS, DEFAULT_TRAIN_RATIO, PROCESSED_ROOT, SECTION_NAMES
 from .storage import get_dataset_label, list_audio_paths, section_dir
 
 
@@ -54,7 +54,7 @@ class SplitConfig:
     post_sec: float = 0.20
     min_gap_sec: float = 0.04
     hop_length: int = 256
-    delta_list: list[float] = field(default_factory=lambda: [0.20, 0.15, 0.12, 0.10, 0.08, 0.06, 0.05, 0.04])
+    delta_list: list[float] = field(default_factory=lambda: list(DEFAULT_DELTA_LIST))
 
 
 @dataclass
@@ -62,6 +62,7 @@ class ExperimentConfig:
     preprocessing: PreprocessingConfig = field(default_factory=PreprocessingConfig)
     split: SplitConfig = field(default_factory=SplitConfig)
     train_ratio: float = DEFAULT_TRAIN_RATIO
+    good_hits: int = DEFAULT_GOOD_HITS
     bad_hits: int = DEFAULT_BAD_HITS
     selected_models: list[str] = field(default_factory=lambda: list(MODEL_ORDER))
     selected_feature_sets: list[str] = field(default_factory=lambda: list(FEATURE_SET_ORDER))
@@ -90,6 +91,7 @@ def experiment_config_from_dict(data: dict[str, Any]) -> ExperimentConfig:
         preprocessing=PreprocessingConfig(**data["preprocessing"]),
         split=SplitConfig(**data["split"]),
         train_ratio=float(data.get("train_ratio", DEFAULT_TRAIN_RATIO)),
+        good_hits=int(data.get("good_hits", DEFAULT_GOOD_HITS)),
         bad_hits=int(data["bad_hits"]),
         selected_models=list(data["selected_models"]),
         selected_feature_sets=list(data["selected_feature_sets"]),
@@ -131,8 +133,8 @@ def label_from_name(filename: str) -> int:
     raise ValueError(f"Cannot infer label from filename '{filename}'. Expected a suffix of '_g' or '_b'.")
 
 
-def expected_hits_from_name(filename: str, bad_hits: int) -> int:
-    return GOOD_HITS if label_from_name(filename) == 0 else bad_hits
+def expected_hits_from_name(filename: str, good_hits: int, bad_hits: int) -> int:
+    return good_hits if label_from_name(filename) == 0 else bad_hits
 
 
 def enforce_min_gap(frames: np.ndarray, min_gap_frames: int) -> np.ndarray:
@@ -226,11 +228,12 @@ def process_audio_file(
     file_path: Path,
     preprocessing: PreprocessingConfig,
     split_config: SplitConfig,
+    good_hits: int,
     bad_hits: int,
 ) -> ProcessedAudioFile:
     y_raw, sr = load_audio_mono(file_path)
     y_processed = safe_preprocess_waveform(y_raw, sr, preprocessing)
-    expected_hits = expected_hits_from_name(file_path.name, bad_hits)
+    expected_hits = expected_hits_from_name(file_path.name, good_hits, bad_hits)
     onset_frames, onset_envelope, used_delta = detect_onsets_adaptive(
         y_processed,
         sr,
@@ -471,6 +474,7 @@ def process_section_dataset(
                 file_path=file_path,
                 preprocessing=config.preprocessing,
                 split_config=config.split,
+                good_hits=config.good_hits,
                 bad_hits=config.bad_hits,
             )
 
@@ -565,6 +569,22 @@ def _slice_section_dataset(
             .agg(assigned_hits=("hit_index", "count"))
             .reset_index()
         )
+        pooled_diag = pooled["diag_df"].copy() if not pooled["diag_df"].empty else pd.DataFrame()
+        if not pooled_diag.empty:
+            pooled_diag = pooled_diag[[
+                "group",
+                "relative_path",
+                "source_file",
+                "found_hits",
+                "expected_hits",
+                "delta_used",
+                "duration_sec",
+            ]]
+            grouped = grouped.merge(
+                pooled_diag,
+                on=["group", "relative_path", "source_file"],
+                how="left",
+            )
         grouped["status"] = "ok"
         grouped["split_role"] = section_name
         grouped["error"] = ""
@@ -890,9 +910,10 @@ def build_signal_preview(
     file_path: Path,
     preprocessing: PreprocessingConfig,
     split_config: SplitConfig,
+    good_hits: int,
     bad_hits: int,
 ) -> dict[str, Any]:
-    processed = process_audio_file(file_path, preprocessing, split_config, bad_hits)
+    processed = process_audio_file(file_path, preprocessing, split_config, good_hits, bad_hits)
     sr = processed.sample_rate
     time_raw = np.arange(len(processed.raw_signal)) / sr
     time_processed = np.arange(len(processed.processed_signal)) / sr

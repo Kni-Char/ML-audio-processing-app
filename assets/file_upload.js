@@ -38,8 +38,16 @@
     return wrapper.querySelector('input[type="file"]');
   }
 
+  function getUploadMode() {
+    return (byId("upload-directory-mode")?.textContent || "subfolder").trim();
+  }
+
   function isRootMode() {
-    return (byId("upload-directory-mode")?.textContent || "subfolder").trim() === "root";
+    return getUploadMode() === "root";
+  }
+
+  function isDisabledMode() {
+    return getUploadMode() === "disabled";
   }
 
   function applyUploadMode() {
@@ -48,13 +56,22 @@
       return;
     }
 
-    if (isRootMode()) {
+    if (isDisabledMode()) {
+      input.removeAttribute("webkitdirectory");
+      input.removeAttribute("directory");
+      input.removeAttribute("mozdirectory");
+      input.webkitdirectory = false;
+      input.directory = false;
+      input.mozdirectory = false;
+      input.disabled = true;
+    } else if (isRootMode()) {
       input.setAttribute("webkitdirectory", "");
       input.setAttribute("directory", "");
       input.setAttribute("mozdirectory", "");
       input.webkitdirectory = true;
       input.directory = true;
       input.mozdirectory = true;
+      input.disabled = false;
     } else {
       input.removeAttribute("webkitdirectory");
       input.removeAttribute("directory");
@@ -62,6 +79,7 @@
       input.webkitdirectory = false;
       input.directory = false;
       input.mozdirectory = false;
+      input.disabled = false;
     }
   }
 
@@ -173,6 +191,12 @@
   }
 
   function handleUploadClick(event) {
+    if (isDisabledMode()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     if (!isRootMode()) {
       return;
     }
@@ -183,6 +207,12 @@
   }
 
   function handleUploadDragOver(event) {
+    if (isDisabledMode()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     event.preventDefault();
     event.stopPropagation();
     if (event.dataTransfer) {
@@ -191,6 +221,12 @@
   }
 
   function handleUploadDrop(event) {
+    if (isDisabledMode()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     event.preventDefault();
     event.stopPropagation();
 

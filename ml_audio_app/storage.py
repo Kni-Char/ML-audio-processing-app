@@ -28,6 +28,9 @@ from .config import (
     SOURCE_SECTION_NAMES,
 )
 
+RUNS_SECTION_KEY = "runs"
+RUNS_SECTION_LABEL = "Saved Runs"
+
 
 DATASET_LABEL_FALLBACKS = {
     DEFAULT_DATASET_SLUG: DEFAULT_DATASET_LABEL,
@@ -474,6 +477,21 @@ def list_folder_records(dataset_slug: str) -> list[dict[str, str | int | bool]]:
                 }
             )
 
+    run_rows = list_run_file_rows(dataset_slug)
+    latest_modified = max((str(row["modified"]) for row in run_rows), default="")
+    records.append(
+        {
+            "section_key": RUNS_SECTION_KEY,
+            "section_label": RUNS_SECTION_LABEL,
+            "group_key": "",
+            "parent_group_key": "",
+            "name": RUNS_SECTION_LABEL,
+            "file_count": len(run_rows),
+            "modified": latest_modified,
+            "is_root": True,
+        }
+    )
+
     return records
 
 
@@ -715,7 +733,7 @@ def load_run_artifact(run_path: str | Path) -> dict:
 
 
 def _run_artifact_record(path: Path) -> dict[str, str] | None:
-    modified = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+    modified = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
     label = path.stem
     dataset_slug = ""
     try:
@@ -731,7 +749,32 @@ def _run_artifact_record(path: Path) -> dict[str, str] | None:
         "label": f"{label} ({modified})",
         "value": str(path),
         "dataset_slug": dataset_slug,
+        "modified": modified,
     }
+
+
+def list_run_file_rows(dataset_slug: str | None = None) -> list[dict[str, str]]:
+    ensure_app_directories()
+    normalized_dataset = slugify_dataset_name(dataset_slug) if dataset_slug else None
+    rows: list[dict[str, str]] = []
+
+    for path in sorted(RUNS_ROOT.glob("*.joblib"), key=lambda item: item.stat().st_mtime, reverse=True):
+        record = _run_artifact_record(path)
+        if not record:
+            continue
+        if normalized_dataset and record.get("dataset_slug") != normalized_dataset:
+            continue
+        rows.append(
+            {
+                "name": path.name,
+                "artifact_path": str(path),
+                "size_kb": f"{path.stat().st_size / 1024:.1f}",
+                "modified": record.get("modified", ""),
+                "dataset_slug": str(record.get("dataset_slug", "")),
+            }
+        )
+
+    return rows
 
 
 def list_run_artifacts(dataset_slug: str | None = None) -> list[dict[str, str]]:
@@ -755,3 +798,13 @@ def get_latest_run_artifact(dataset_slug: str | None = None) -> dict[str, str] |
     if not records:
         return None
     return records[0]
+
+
+def delete_run_artifacts(run_paths: Iterable[str]) -> list[str]:
+    deleted: list[str] = []
+    for run_path in run_paths:
+        path = Path(run_path)
+        if path.exists() and path.is_file():
+            path.unlink()
+            deleted.append(path.name)
+    return deleted

@@ -9,23 +9,25 @@ from .config import DEFAULT_RECORDING_PREFIX, DEFAULT_TRAIN_RATIO, SOURCE_SECTIO
 from .pipeline import build_signal_preview, train_experiment
 from .plots import (
     make_accuracy_figure,
-    make_clip_lengths_figure,
     make_onset_figure,
     make_spectrogram_figure,
     make_waveform_figure,
 )
 from .storage import (
+    RUNS_SECTION_KEY,
     build_recording_name,
     clone_dataset_bundle,
     delete_dataset_bundle,
     delete_folders,
     create_subfolder,
     delete_files,
+    delete_run_artifacts,
     get_dataset_record,
     get_latest_run_artifact,
     list_audio_files,
     list_dataset_options,
     list_folder_records,
+    list_run_file_rows,
     list_run_artifacts,
     load_run_artifact,
     resolve_existing_dataset_slug,
@@ -36,12 +38,11 @@ from .storage import (
 )
 from .ui_helpers import (
     build_confusion_grid,
-    build_attached_run_status,
     build_browser_rows,
     build_dataset_banner,
     build_file_summary_cards,
     build_file_tree,
-    build_run_banner,
+    build_results_banner,
     list_available_folder_keys,
     parse_folder_key,
     flatten_diagnostics,
@@ -163,6 +164,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         Output("save-bundle-name", "value"),
         Output("save-bundle-description", "value"),
         Output("dataset-switch-request", "data"),
+        Output("current-run-store", "data", allow_duplicate=True),
         Input("active-dataset-dropdown", "value"),
         Input("file-upload", "contents"),
         Input("refresh-files-btn", "n_clicks"),
@@ -180,7 +182,11 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         State("file-table", "derived_virtual_data"),
         State("file-table", "selected_rows"),
         State("file-manager-refresh-token", "data"),
+        State("current-run-store", "data"),
         prevent_initial_call=True,
+        running=[
+            (Output("file-management-progress-shell", "style"), {"display": "grid"}, {"display": "none"}),
+        ],
     )
     def handle_file_actions(
         active_dataset_slug,
@@ -200,11 +206,12 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         visible_rows,
         selected_rows,
         refresh_token,
+        current_run,
     ):
         trigger = callback_context.triggered[0]["prop_id"].split(".")[0] if callback_context.triggered else None
         dataset_slug = active_dataset_slug or default_active_dataset
         dataset_label = get_dataset_record(dataset_slug)["label"]
-        message = message_block(f"{dataset_label} is ready for uploads and section moves.", "info", auto_dismiss=True)
+        message = message_block(f"{dataset_label} is ready for uploads, folders, and dataset actions.", "info", auto_dismiss=True)
         dataset_switch_request = no_update
         save_bundle_name_value = ""
         save_bundle_description_value = ""
@@ -212,23 +219,28 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         selected_rows = selected_rows or []
         selected_file_ids = []
         selected_folder_targets = []
+        selected_run_paths = []
         for index in selected_rows:
             if index >= len(current_rows):
                 continue
             row = current_rows[index]
             if row.get("row_type") == "file" and row.get("file_id"):
                 selected_file_ids.append(row["file_id"])
+            elif row.get("row_type") == "run" and row.get("file_id"):
+                selected_run_paths.append(row["file_id"])
             elif row.get("row_type") == "folder" and row.get("nav_key"):
                 folder_section, folder_group = parse_folder_key(row["nav_key"])
                 if folder_section and folder_group:
                     selected_folder_targets.append((folder_section, folder_group))
+
+        next_current_run = no_update
 
         try:
             if trigger == "active-dataset-dropdown":
                 message = message_block(f"Showing files from {dataset_label}.", "info", auto_dismiss=True)
             if trigger == "file-upload" and upload_contents:
                 upload_section, upload_group = parse_folder_key(selected_folder_key)
-                if not upload_section:
+                if not upload_section or upload_section == RUNS_SECTION_KEY:
                     raise ValueError("Select a destination folder in the tree before uploading.")
                 try:
                     upload_relative_paths = json.loads(upload_relative_paths_raw) if upload_relative_paths_raw else []
@@ -247,39 +259,62 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                 message = message_block(message_text, "success", auto_dismiss=True)
             elif trigger == "create-folder-btn":
                 target_section, target_group = parse_folder_key(selected_folder_key)
-                if not target_section:
+                if not target_section or target_section == RUNS_SECTION_KEY:
                     raise ValueError("Select Train/Test Pool, Validation, or a sub-folder before creating a new folder.")
                 created = create_subfolder(dataset_slug, target_section, target_group or "", create_folder_name or "")
                 parent_label = SOURCE_SECTION_LABELS[target_section]
                 if target_group:
                     parent_label += f" / {target_group}"
-                message = message_block(f"Created folder '{created.name}' inside {dataset_label} / {parent_label}.", "success", auto_dismiss=True)
+                message = message_block(
+                    f"Created folder '{created.name}' inside {dataset_label} / {parent_label}.",
+                    "success",
+                    auto_dismiss=True,
+                )
             elif trigger == "delete-files-btn":
-                if not selected_file_ids and not selected_folder_targets:
+                if not selected_file_ids and not selected_folder_targets and not selected_run_paths:
                     current_section, current_group = parse_folder_key(selected_folder_key)
                     if current_section and current_group:
                         selected_folder_targets.append((current_section, current_group))
 
                 deleted_files = delete_files(selected_file_ids)
                 deleted_folders = delete_folders(dataset_slug, selected_folder_targets)
+                deleted_runs = delete_run_artifacts(selected_run_paths)
 
                 deleted_parts = []
                 if deleted_files:
                     deleted_parts.append(f"{len(deleted_files)} file(s)")
                 if deleted_folders:
                     deleted_parts.append(f"{len(deleted_folders)} folder(s)")
+                if deleted_runs:
+                    deleted_parts.append(f"{len(deleted_runs)} saved run(s)")
                 if not deleted_parts:
-                    raise ValueError("Select one or more files or a sub-folder before deleting. Root sections cannot be deleted.")
-                message = message_block(f"Deleted {' and '.join(deleted_parts)} from {dataset_label}.", "success", auto_dismiss=True)
+                    raise ValueError("Select one or more files, saved runs, or a sub-folder before deleting. Root sections cannot be deleted.")
+                message = message_block(
+                    f"Deleted {' and '.join(deleted_parts)} from {dataset_label}.",
+                    "success",
+                    auto_dismiss=True,
+                )
+                current_artifact = (current_run or {}).get("artifact_path")
+                if current_artifact and current_artifact in selected_run_paths:
+                    latest = get_latest_run_artifact(dataset_slug)
+                    next_current_run = {"artifact_path": latest["value"], "load_mode": "attached_saved"} if latest else None
             elif trigger == "save-dataset-bundle-btn":
                 created = clone_dataset_bundle(dataset_slug, save_bundle_name or "", save_bundle_description or "")
                 dataset_switch_request = created["slug"]
-                message = message_block(f"Saved {dataset_label} as new dataset bundle '{created['label']}'.", "success", auto_dismiss=True)
+                message = message_block(
+                    f"Saved {dataset_label} as new dataset bundle '{created['label']}'.",
+                    "success",
+                    auto_dismiss=True,
+                )
             elif trigger == "delete-dataset-bundle-btn":
                 delete_target_slug = resolve_existing_dataset_slug(save_bundle_name) or dataset_slug
                 deleted = delete_dataset_bundle(delete_target_slug)
                 dataset_switch_request = deleted["slug"]
-                message = message_block(f"Deleted dataset bundle '{deleted['label']}'.", "success", auto_dismiss=True)
+                message = message_block(
+                    f"Deleted dataset bundle '{deleted['label']}'.",
+                    "success",
+                    auto_dismiss=True,
+                )
             elif trigger == "refresh-files-btn":
                 message = message_block(f"Refreshed {dataset_label}.", "info", auto_dismiss=True)
         except Exception as exc:
@@ -299,6 +334,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
             save_bundle_name_value,
             save_bundle_description_value,
             dataset_switch_request,
+            next_current_run,
         )
 
     @app.callback(
@@ -362,10 +398,14 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         dataset_slug = active_dataset_slug or default_active_dataset
         rows = list_audio_files(dataset_slug)
         folder_records = list_folder_records(dataset_slug)
+        run_rows = list_run_file_rows(dataset_slug)
         available_keys = list_available_folder_keys(folder_records)
         effective_folder_key = selected_folder_key if selected_folder_key in available_keys else (available_keys[0] if available_keys else None)
         upload_section, upload_group = parse_folder_key(effective_folder_key)
-        if upload_section:
+        if upload_section == RUNS_SECTION_KEY:
+            upload_note = "Saved runs are listed here so you can review and delete model artifacts. Uploads are disabled in this folder."
+            upload_mode = "disabled"
+        elif upload_section:
             destination = SOURCE_SECTION_LABELS[upload_section]
             if upload_group:
                 destination += f" / {upload_group}"
@@ -381,7 +421,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         else:
             upload_note = "Select a folder in the tree to upload audio."
             upload_mode = "subfolder"
-        browser_rows = build_browser_rows(rows, folder_records, effective_folder_key)
+        browser_rows = build_browser_rows(rows, folder_records, effective_folder_key, run_rows)
         return (
             build_file_tree(folder_records, effective_folder_key),
             upload_note,
@@ -404,7 +444,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         selectable_rows = [
             index
             for index, row in enumerate(table_rows)
-            if row.get("row_type") in {"file", "folder"}
+            if row.get("row_type") in {"file", "folder", "run"}
         ]
         if not selectable_rows:
             return []
@@ -438,10 +478,11 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         Output("saved-run-dropdown", "value"),
         Output("run-mode", "value"),
         Input("active-dataset-dropdown", "value"),
+        Input("file-manager-refresh-token", "data"),
         Input("current-run-store", "data"),
         State("saved-run-dropdown", "value"),
     )
-    def refresh_run_options(active_dataset_slug, current_run, current_saved_run):
+    def refresh_run_options(active_dataset_slug, _refresh_token, current_run, current_saved_run):
         dataset_slug = active_dataset_slug or default_active_dataset
         options = list_run_artifacts(dataset_slug)
         option_values = {option["value"] for option in options}
@@ -471,17 +512,6 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         return None
 
     @app.callback(
-        Output("attached-run-status-file", "children"),
-        Output("attached-run-status-results", "children"),
-        Input("active-dataset-dropdown", "value"),
-        Input("current-run-store", "data"),
-    )
-    def update_attached_run_status(active_dataset_slug, current_run):
-        dataset_slug = active_dataset_slug or default_active_dataset
-        status = build_attached_run_status(dataset_slug, current_run)
-        return status, status
-
-    @app.callback(
         Output("preprocessing-detail-container", "style"),
         Output("preprocessing-advanced-container", "style"),
         Input("preprocessing-enabled", "value"),
@@ -506,6 +536,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         State("highcut-hz", "value"),
         State("filter-order", "value"),
         State("train-ratio", "value"),
+        State("good-hits", "value"),
         State("pre-sec", "value"),
         State("post-sec", "value"),
         State("min-gap-sec", "value"),
@@ -532,6 +563,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         highcut_hz,
         filter_order,
         train_ratio,
+        good_hits,
         pre_sec,
         post_sec,
         min_gap_sec,
@@ -567,6 +599,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                     highcut_hz,
                     filter_order,
                     train_ratio,
+                    good_hits,
                     pre_sec,
                     post_sec,
                     min_gap_sec,
@@ -618,7 +651,6 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         Output("processed-waveform-graph", "figure"),
         Output("onset-graph", "figure"),
         Output("spectrogram-graph", "figure"),
-        Output("clip-lengths-graph", "figure"),
         Input("preview-file-dropdown", "value"),
         State("preprocessing-enabled", "value"),
         State("preprocessing-detail-flags", "value"),
@@ -630,6 +662,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         State("min-gap-sec", "value"),
         State("hop-length", "value"),
         State("delta-list", "value"),
+        State("good-hits", "value"),
         State("bad-hits", "value"),
     )
     def update_signal_preview(
@@ -644,15 +677,15 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         min_gap_sec,
         hop_length,
         delta_list,
+        good_hits,
         bad_hits,
     ):
         empty_wave = make_waveform_figure([], [], "No file selected", "#9ca3af")
         empty_onset = make_onset_figure([], [], [])
         empty_spec = make_spectrogram_figure([[0]], [0], [0])
-        empty_clips = make_clip_lengths_figure([])
 
         if not file_id:
-            return "", "Select a file to inspect.", empty_wave, empty_wave, empty_onset, empty_spec, empty_clips
+            return "", "Select a file to inspect.", empty_wave, empty_wave, empty_onset, empty_spec
 
         dataset_slug, section, relative_path = file_id.split("|", 2)
         file_path = resolve_audio_path(dataset_slug, section, relative_path)
@@ -663,6 +696,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
             highcut_hz,
             filter_order,
             DEFAULT_TRAIN_RATIO,
+            good_hits,
             pre_sec,
             post_sec,
             min_gap_sec,
@@ -675,7 +709,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         )
 
         try:
-            preview = build_signal_preview(file_path, config.preprocessing, config.split, config.bad_hits)
+            preview = build_signal_preview(file_path, config.preprocessing, config.split, config.good_hits, config.bad_hits)
             metadata = (
                 f"{get_dataset_record(dataset_slug)['label']} / {SOURCE_SECTION_LABELS.get(section, section.title())} / {relative_path} | "
                 f"Label: {preview['label']} | Expected hits: {preview['expected_hits']} | "
@@ -688,11 +722,10 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                 make_waveform_figure(preview["processed_time"], preview["processed_signal"], "Processed Waveform", "#0f766e"),
                 make_onset_figure(preview["onset_time_axis"], preview["onset_envelope"], preview["onset_times"]),
                 make_spectrogram_figure(preview["spectrogram_db"], preview["spectrogram_times"], preview["spectrogram_freqs"]),
-                make_clip_lengths_figure(preview["clip_lengths"]),
             )
         except Exception as exc:
             error_figure = make_waveform_figure([], [], "Preview unavailable", "#9ca3af")
-            return make_media_url(file_id), str(exc), error_figure, error_figure, empty_onset, empty_spec, empty_clips
+            return make_media_url(file_id), str(exc), error_figure, error_figure, empty_onset, empty_spec
 
     @app.callback(
         Output("run-banner-container", "children"),
@@ -706,14 +739,16 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         Output("confusion-grid", "children"),
         Output("diagnostics-table", "data"),
         Output("diagnostics-table", "columns"),
+        Input("active-dataset-dropdown", "value"),
         Input("current-run-store", "data"),
     )
-    def populate_results(current_run):
+    def populate_results(active_dataset_slug, current_run):
+        dataset_slug = active_dataset_slug or default_active_dataset
         if not current_run or not current_run.get("artifact_path"):
             empty_results = []
             empty_columns = make_columns([])
             return (
-                message_block("Run the pipeline to populate analysis outputs.", "info"),
+                build_results_banner(dataset_slug, current_run),
                 make_accuracy_figure([]),
                 empty_results,
                 empty_columns,
@@ -733,7 +768,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         diagnostics_rows = flatten_diagnostics(bundle)
 
         return (
-            build_run_banner(bundle, current_run),
+            build_results_banner(dataset_slug, current_run, bundle),
             make_accuracy_figure(results_rows),
             results_rows,
             make_columns(list(results_rows[0].keys()) if results_rows else []),
