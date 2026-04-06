@@ -587,7 +587,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                     raise ValueError("No saved run is attached to this dataset yet. Switch to 'Train new models' once to create one.")
                 bundle = load_run_artifact(saved_run_path)
                 summary = f"Loaded attached saved run {bundle.get('run_id', Path(saved_run_path).stem)} for {dataset_label}."
-                return message_block(summary, "success"), {
+                return message_block(summary, "success", auto_dismiss=True), {
                     "artifact_path": str(saved_run_path),
                     "run_id": bundle.get("run_id"),
                     "load_mode": "attached_saved",
@@ -620,7 +620,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                         f" Best validation model: {top_row['feature_set']} | {top_row['model']} "
                         f"({top_row['validation_accuracy']:.4f})."
                     )
-                return message_block(summary, "success"), {
+                return message_block(summary, "success", auto_dismiss=True), {
                     "artifact_path": str(artifact_path),
                     "run_id": bundle["run_id"],
                     "load_mode": "trained_now",
