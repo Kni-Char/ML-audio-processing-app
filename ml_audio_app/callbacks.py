@@ -345,11 +345,12 @@ def register_callbacks(app, default_active_dataset: str) -> None:
     def refresh_dataset_options_after_save(dataset_switch_request, _refresh_token, current_dataset_slug):
         options = list_dataset_options()
         option_values = {option["value"] for option in options}
-        next_value = (
-            dataset_switch_request
-            if dataset_switch_request in option_values
-            else current_dataset_slug if current_dataset_slug in option_values else default_active_dataset
-        )
+        if dataset_switch_request in option_values:
+            next_value = dataset_switch_request
+        elif current_dataset_slug in option_values:
+            next_value = no_update
+        else:
+            next_value = default_active_dataset if default_active_dataset in option_values else (options[0]["value"] if options else None)
         return options, next_value
 
     @app.callback(
