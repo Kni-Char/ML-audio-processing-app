@@ -107,8 +107,8 @@ def studio_tab(default_dataset_slug: str) -> html.Div:
                     html.Div(
                         className="button-row",
                         children=[
-                            html.Button("Start Recording", id="record-start-btn", n_clicks=0, className="button button-primary"),
-                            html.Button("Stop Recording", id="record-stop-btn", n_clicks=0, className="button button-secondary"),
+                            html.Button("⏺ Start Recording (click again to stop)", id="record-toggle-btn", n_clicks=0, className="button button-primary"),
+                            html.Button("Clear Recording", id="record-clear-btn", n_clicks=0, className="button button-secondary"),
                             html.Button("Save Recording", id="save-recording-btn", n_clicks=0, className="button button-accent"),
                         ],
                     ),

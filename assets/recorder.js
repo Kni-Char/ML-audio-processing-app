@@ -189,17 +189,61 @@
     cleanupRecorder();
   }
 
-  function attachRecorder() {
-    const startButton = byId("record-start-btn");
-    const stopButton = byId("record-stop-btn");
+  function clearRecording() {
+    if (recording) {
+      recording = false;
+      cleanupRecorder();
+    }
+    buffers = [];
+    setDashValue("recording-data", "");
+    const preview = byId("recording-preview-audio");
+    if (preview) {
+      preview.removeAttribute("src");
+      preview.load();
+    }
+    const toggleButton = byId("record-toggle-btn");
+    if (toggleButton) {
+      toggleButton.textContent = "\u23FA Start Recording (click again to stop)";
+      toggleButton.classList.remove("button-danger");
+      toggleButton.classList.add("button-primary");
+    }
+    setStatus("Microphone is idle.");
+  }
 
-    if (!startButton || !stopButton || startButton.dataset.recorderAttached === "true") {
+  function toggleRecording() {
+    const toggleButton = byId("record-toggle-btn");
+    if (recording) {
+      stopRecording();
+      if (toggleButton) {
+        toggleButton.textContent = "\u23FA Start Recording (click again to stop)";
+        toggleButton.classList.remove("button-danger");
+        toggleButton.classList.add("button-primary");
+      }
+    } else {
+      startRecording().then(() => {
+        if (recording && toggleButton) {
+          toggleButton.textContent = "\u23F9 Stop Recording (click again to start)";
+          toggleButton.classList.remove("button-primary");
+          toggleButton.classList.add("button-danger");
+        }
+      });
+    }
+  }
+
+  function attachRecorder() {
+    const toggleButton = byId("record-toggle-btn");
+    const clearButton = byId("record-clear-btn");
+
+    if (!toggleButton || toggleButton.dataset.recorderAttached === "true") {
       return;
     }
 
-    startButton.dataset.recorderAttached = "true";
-    startButton.addEventListener("click", startRecording);
-    stopButton.addEventListener("click", stopRecording);
+    toggleButton.dataset.recorderAttached = "true";
+    toggleButton.addEventListener("click", toggleRecording);
+
+    if (clearButton) {
+      clearButton.addEventListener("click", clearRecording);
+    }
   }
 
   document.addEventListener("DOMContentLoaded", function () {

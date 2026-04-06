@@ -100,6 +100,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         Output("dataset-summary-cards", "children", allow_duplicate=True),
         Output("active-dataset-banner", "children", allow_duplicate=True),
         Output("file-manager-refresh-token", "data", allow_duplicate=True),
+        Output("record-sample-number", "value"),
         Input("save-recording-btn", "n_clicks"),
         State("recording-data", "value"),
         State("active-dataset-dropdown", "value"),
@@ -123,13 +124,14 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         refresh_token,
     ):
         try:
+            current_sample = int(sample_number or 1)
             destination = save_recording(
                 data_url=recording_data,
                 dataset_slug=dataset_slug,
                 section=section,
                 group=group or "",
                 prefix=prefix or DEFAULT_RECORDING_PREFIX,
-                sample_number=int(sample_number or 1),
+                sample_number=current_sample,
                 condition=condition or "g",
             )
             rows = list_audio_files(dataset_slug)
@@ -138,6 +140,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                 build_file_summary_cards(rows),
                 build_dataset_banner(dataset_slug),
                 int(refresh_token or 0) + 1,
+                current_sample + 1,
             )
         except Exception as exc:
             rows = list_audio_files(dataset_slug or default_active_dataset)
@@ -147,6 +150,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                 build_file_summary_cards(rows),
                 build_dataset_banner(active_slug),
                 int(refresh_token or 0),
+                int(sample_number or 1),
             )
 
     @app.callback(
