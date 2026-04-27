@@ -6,8 +6,8 @@ Dash-based web app for recording, organizing, processing, and classifying audio 
 
 - Studio tab for browser-based audio recording with the `S_<sample>_<g|b>` naming convention
 - File Management tab for dataset bundle selection, folder-tree browsing, sub-folder creation, and uploads into:
-  - `Train/Test Pool`
-  - `Validation`
+  - `Train/Validation Pool`
+  - `Testing`
 - Root-level uploads can preserve folder structure, so you can import a folder like `Set1` directly or choose a parent folder containing multiple sets
 - Processing tab for reusable saved-run loading, optional retraining, preprocessing, onset splitting, PSD/MFCC feature extraction, and running:
   - KNN
@@ -18,7 +18,7 @@ Dash-based web app for recording, organizing, processing, and classifying audio 
   - raw vs processed waveform previews
   - onset detection and hit-length inspection
   - confusion matrices
-  - training/testing/validation accuracy comparison
+  - training/validation/testing accuracy comparison
   - robustness ranking and hyperparameter summaries
 
 ## Project Structure
@@ -73,8 +73,9 @@ uv run app.py
 - Source audio is organized by dataset bundle, then by section:
   - `data/<dataset>/pooled/...`
   - `data/<dataset>/validation/...`
-- `Train/Test Pool` is the shared source used for runtime splitting
-- `Validation` is reserved for independent validation recordings
+- `Train/Validation Pool` is the shared source used for runtime splitting
+- `Testing` is reserved for independent held-out recordings
+- The on-disk folder is still named `data/<dataset>/validation/...` for backward compatibility
 - If a root section is selected, the upload area supports full-folder imports
 - If a sub-folder is selected, uploaded files go directly into that folder
 
@@ -83,14 +84,14 @@ uv run app.py
 - The app attaches the latest saved run for the active dataset automatically when available
 - `Use an existing saved run` avoids rebuilding the pooled dataset and retraining models
 - `Train new models` rebuilds features, refits classifiers, and saves a new `.joblib` artifact
-- The advanced settings section contains train/test ratio, onset-splitting parameters, and optional bandpass settings
+- The advanced settings section contains the training/validation split ratio, onset-splitting parameters, and optional bandpass settings
 - A live loader bar and elapsed timer appear while the processing pipeline is running
 
 ### Results / Analysis
 
 - Signal preview uses the current preprocessing configuration
 - Confusion matrices and result tables are populated from the active saved or freshly trained run
-- Validation accuracy is shown alongside testing/training metrics for comparison
+- Testing accuracy is shown alongside validation/training metrics for comparison
 
 ## Notes
 

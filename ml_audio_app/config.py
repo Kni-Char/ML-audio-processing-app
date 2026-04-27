@@ -10,8 +10,8 @@ DATASET_META_FILENAME = "dataset.json"
 
 SOURCE_SECTION_NAMES = ("pooled", "validation")
 SOURCE_SECTION_LABELS = {
-    "pooled": "Train/Test Pool",
-    "validation": "Validation",
+    "pooled": "Train/Validation Pool",
+    "validation": "Testing",
 }
 SOURCE_SECTION_ALIASES = {
     "pooled": "pooled",
@@ -23,8 +23,8 @@ SOURCE_SECTION_ALIASES = {
 SECTION_NAMES = ("training", "testing", "validation")
 SECTION_LABELS = {
     "training": "Training",
-    "testing": "Testing",
-    "validation": "Validation",
+    "testing": "Validation",
+    "validation": "Testing",
 }
 
 DEFAULT_DATASET_SLUG = "workspace"

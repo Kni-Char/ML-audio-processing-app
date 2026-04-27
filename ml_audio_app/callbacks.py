@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from dash import ALL, ClientsideFunction, Input, Output, State, callback_context, no_update
+from dash import ALL, ClientsideFunction, Input, Output, State, callback_context, html, no_update
 
 from .config import DEFAULT_RECORDING_PREFIX, DEFAULT_TRAIN_RATIO, SOURCE_SECTION_LABELS
-from .pipeline import build_signal_preview, train_experiment
+from .pipeline import build_signal_preview, classify_recording_with_run, train_experiment
 from .plots import (
     make_accuracy_figure,
     make_onset_figure,
@@ -30,11 +30,13 @@ from .storage import (
     list_run_file_rows,
     list_run_artifacts,
     load_run_artifact,
+    make_file_id,
     resolve_existing_dataset_slug,
     resolve_audio_path,
     save_recording,
     save_run_artifact,
     save_uploaded_files,
+    section_dir,
 )
 from .ui_helpers import (
     build_confusion_grid,
@@ -92,7 +94,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
             condition=condition or "g",
         )
         dataset_label = get_dataset_record(dataset_slug or default_active_dataset)["label"]
-        section_label = SOURCE_SECTION_LABELS.get(section or "pooled", "Train/Test Pool")
+        section_label = SOURCE_SECTION_LABELS.get(section or "pooled", "Train/Validation Pool")
         group_label = f" / {group}" if group else ""
         return f"Next saved recording: {dataset_label} / {section_label}{group_label} / {name}"
 
@@ -102,6 +104,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         Output("active-dataset-banner", "children", allow_duplicate=True),
         Output("file-manager-refresh-token", "data", allow_duplicate=True),
         Output("record-sample-number", "value"),
+        Output("latest-recording-file-id", "data"),
         Input("save-recording-btn", "n_clicks"),
         State("recording-data", "value"),
         State("active-dataset-dropdown", "value"),
@@ -135,6 +138,8 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                 sample_number=current_sample,
                 condition=condition or "g",
             )
+            relative_path = destination.relative_to(section_dir(dataset_slug, section)).as_posix()
+            recording_file_id = make_file_id(dataset_slug, section, relative_path)
             rows = list_audio_files(dataset_slug)
             return (
                 message_block(f"Saved recording to {get_dataset_record(dataset_slug)['label']} / {SOURCE_SECTION_LABELS[section]} as {destination.name}.", "success", auto_dismiss=True),
@@ -142,6 +147,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                 build_dataset_banner(dataset_slug),
                 int(refresh_token or 0) + 1,
                 current_sample + 1,
+                recording_file_id,
             )
         except Exception as exc:
             rows = list_audio_files(dataset_slug or default_active_dataset)
@@ -152,6 +158,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
                 build_dataset_banner(active_slug),
                 int(refresh_token or 0),
                 int(sample_number or 1),
+                no_update,
             )
 
     @app.callback(
@@ -257,7 +264,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
             elif trigger == "create-folder-btn":
                 target_section, target_group = parse_folder_key(selected_folder_key)
                 if not target_section or target_section == RUNS_SECTION_KEY:
-                    raise ValueError("Select Train/Test Pool, Validation, or a sub-folder before creating a new folder.")
+                    raise ValueError("Select Train/Validation Pool, Testing, or a sub-folder before creating a new folder.")
                 created = create_subfolder(dataset_slug, target_section, target_group or "", create_folder_name or "")
                 parent_label = SOURCE_SECTION_LABELS[target_section]
                 if target_group:
@@ -612,10 +619,10 @@ def register_callbacks(app, default_active_dataset: str) -> None:
 
                 artifact_path = save_run_artifact(bundle)
                 top_row = bundle["results_table"][0] if bundle["results_table"] else None
-                summary = f"Saved run {bundle['run_id']} for {dataset_label} to {artifact_path.name} using a pooled {config.train_ratio:.0%}/{1 - config.train_ratio:.0%} train/test split."
+                summary = f"Saved run {bundle['run_id']} for {dataset_label} to {artifact_path.name} using a pooled {config.train_ratio:.0%}/{1 - config.train_ratio:.0%} training/validation split."
                 if top_row:
                     summary += (
-                        f" Best validation model: {top_row['feature_set']} | {top_row['model']} "
+                        f" Best testing model: {top_row['feature_set']} | {top_row['model']} "
                         f"({top_row['validation_accuracy']:.4f})."
                     )
                 return message_block(summary, "success", auto_dismiss=True), {
@@ -631,25 +638,35 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         Output("preview-file-dropdown", "value"),
         Input("active-dataset-dropdown", "value"),
         Input("file-manager-refresh-token", "data"),
+        Input("latest-recording-file-id", "data"),
         State("preview-file-dropdown", "value"),
     )
-    def sync_preview_dropdown(active_dataset_slug, _refresh_token, current_value):
+    def sync_preview_dropdown(active_dataset_slug, _refresh_token, latest_recording_file_id, current_value):
         dataset_slug = active_dataset_slug or default_active_dataset
         rows = list_audio_files(dataset_slug)
         options = [{"label": f"{row['section']} / {row['group']} / {row['name']}", "value": row["file_id"]} for row in rows]
         values = {option["value"] for option in options}
+        triggered_props = {item["prop_id"].split(".")[0] for item in callback_context.triggered}
+        if "latest-recording-file-id" in triggered_props and latest_recording_file_id in values:
+            return options, latest_recording_file_id
         if current_value in values:
             return options, current_value
+        if latest_recording_file_id in values:
+            return options, latest_recording_file_id
         return options, (options[0]["value"] if options else None)
 
     @app.callback(
         Output("preview-audio", "src"),
         Output("preview-metadata", "children"),
+        Output("recording-classification-summary", "children"),
+        Output("recording-classification-table", "data"),
+        Output("recording-classification-table", "columns"),
         Output("raw-waveform-graph", "figure"),
         Output("processed-waveform-graph", "figure"),
         Output("onset-graph", "figure"),
         Output("spectrogram-graph", "figure"),
         Input("preview-file-dropdown", "value"),
+        Input("current-run-store", "data"),
         State("preprocessing-enabled", "value"),
         State("preprocessing-detail-flags", "value"),
         State("lowcut-hz", "value"),
@@ -665,6 +682,7 @@ def register_callbacks(app, default_active_dataset: str) -> None:
     )
     def update_signal_preview(
         file_id,
+        current_run,
         preprocessing_enabled,
         preprocessing_detail_flags,
         lowcut_hz,
@@ -681,9 +699,21 @@ def register_callbacks(app, default_active_dataset: str) -> None:
         empty_wave = make_waveform_figure([], [], "No file selected", "#9ca3af")
         empty_onset = make_onset_figure([], [], [])
         empty_spec = make_spectrogram_figure([[0]], [0], [0])
+        empty_classification_rows = []
+        empty_classification_columns = make_columns([])
 
         if not file_id:
-            return "", "Select a file to inspect.", empty_wave, empty_wave, empty_onset, empty_spec
+            return (
+                "",
+                "Select a file to inspect.",
+                message_block("Select a recording to see its classification result from the active run.", "info"),
+                empty_classification_rows,
+                empty_classification_columns,
+                empty_wave,
+                empty_wave,
+                empty_onset,
+                empty_spec,
+            )
 
         dataset_slug, section, relative_path = file_id.split("|", 2)
         file_path = resolve_audio_path(dataset_slug, section, relative_path)
@@ -708,6 +738,58 @@ def register_callbacks(app, default_active_dataset: str) -> None:
 
         try:
             preview = build_signal_preview(file_path, config.preprocessing, config.split, config.good_hits, config.bad_hits)
+            if current_run and current_run.get("artifact_path"):
+                try:
+                    bundle = load_run_artifact(current_run["artifact_path"])
+                    classification = classify_recording_with_run(bundle, file_path)
+                    predicted_label = classification["predicted_label"]
+                    summary_class = (
+                        "classification-card is-good"
+                        if predicted_label == 0
+                        else "classification-card is-bad"
+                        if predicted_label == 1
+                        else "classification-card is-mixed"
+                    )
+                    classification_summary = html.Div(
+                        className=summary_class,
+                        children=[
+                            html.Div(
+                                f"Using best testing model: {classification['feature_set']} + {classification['model']}",
+                                className="classification-eyebrow",
+                            ),
+                            html.Div(
+                                f"Recording prediction: {classification['predicted_label_text']}",
+                                className="classification-title",
+                            ),
+                            html.Div(
+                                (
+                                    f"Good votes: {classification['good_votes']} | "
+                                    f"Bad votes: {classification['bad_votes']} | "
+                                    f"Detected hits: {classification['found_hits']}"
+                                ),
+                                className="classification-meta",
+                            ),
+                            html.Div(
+                                (
+                                    f"Source label from filename: {classification['source_label_text']} "
+                                    f"({classification['source_label']}) | "
+                                    f"Testing accuracy of this model: {classification['validation_accuracy']}"
+                                ),
+                                className="classification-submeta",
+                            ),
+                        ],
+                    )
+                    classification_rows = classification["hit_rows"]
+                    classification_columns = make_columns(list(classification_rows[0].keys()) if classification_rows else [])
+                except Exception as exc:
+                    classification_summary = message_block(f"Classification unavailable: {exc}", "danger")
+                    classification_rows = empty_classification_rows
+                    classification_columns = empty_classification_columns
+            else:
+                classification_summary = message_block("Load or attach a run to classify the selected recording.", "info")
+                classification_rows = empty_classification_rows
+                classification_columns = empty_classification_columns
+
             metadata = (
                 f"{get_dataset_record(dataset_slug)['label']} / {SOURCE_SECTION_LABELS.get(section, section.title())} / {relative_path} | "
                 f"Label: {preview['label']} | Expected hits: {preview['expected_hits']} | "
@@ -716,6 +798,9 @@ def register_callbacks(app, default_active_dataset: str) -> None:
             return (
                 make_media_url(file_id),
                 metadata,
+                classification_summary,
+                classification_rows,
+                classification_columns,
                 make_waveform_figure(preview["raw_time"], preview["raw_signal"], "Raw Waveform", "#c2410c"),
                 make_waveform_figure(preview["processed_time"], preview["processed_signal"], "Processed Waveform", "#0f766e"),
                 make_onset_figure(preview["onset_time_axis"], preview["onset_envelope"], preview["onset_times"]),
@@ -723,7 +808,17 @@ def register_callbacks(app, default_active_dataset: str) -> None:
             )
         except Exception as exc:
             error_figure = make_waveform_figure([], [], "Preview unavailable", "#9ca3af")
-            return make_media_url(file_id), str(exc), error_figure, error_figure, empty_onset, empty_spec
+            return (
+                make_media_url(file_id),
+                str(exc),
+                message_block(str(exc), "danger"),
+                empty_classification_rows,
+                empty_classification_columns,
+                error_figure,
+                error_figure,
+                empty_onset,
+                empty_spec,
+            )
 
     @app.callback(
         Output("run-banner-container", "children"),

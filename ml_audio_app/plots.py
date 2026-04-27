@@ -141,8 +141,8 @@ def make_accuracy_figure(results_rows: list[dict]) -> go.Figure:
 
     x_labels = [f"{row.feature_set} | {row.model}" for row in frame.itertuples()]
     figure.add_trace(go.Bar(name="Train", x=x_labels, y=frame["train_accuracy"], marker_color="#2563eb"))
-    figure.add_trace(go.Bar(name="Testing", x=x_labels, y=frame["testing_accuracy"], marker_color="#0891b2"))
-    figure.add_trace(go.Bar(name="Validation", x=x_labels, y=frame["validation_accuracy"], marker_color="#059669"))
+    figure.add_trace(go.Bar(name="Validation", x=x_labels, y=frame["testing_accuracy"], marker_color="#0891b2"))
+    figure.add_trace(go.Bar(name="Testing", x=x_labels, y=frame["validation_accuracy"], marker_color="#059669"))
     figure.update_layout(
         title="Model Accuracy Overview",
         barmode="group",
@@ -182,4 +182,3 @@ def make_confusion_matrix_figure(matrix: list[list[int]], title: str) -> go.Figu
         yaxis_title="Actual Label",
     )
     return figure
-

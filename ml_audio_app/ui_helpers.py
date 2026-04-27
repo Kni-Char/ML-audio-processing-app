@@ -17,7 +17,12 @@ def message_block(message: str, tone: str = "info", auto_dismiss: bool = False) 
 
 
 def make_columns(column_names: list[str]) -> list[dict[str, str]]:
-    return [{"name": name.replace("_", " ").title(), "id": name} for name in column_names]
+    labels = {
+        "testing_accuracy": "Validation Accuracy",
+        "validation_accuracy": "Testing Accuracy",
+        "testing_to_validation_drop": "Validation To Testing Drop",
+    }
+    return [{"name": labels.get(name, name.replace("_", " ").title()), "id": name} for name in column_names]
 
 
 def build_file_summary_cards(rows: list[dict]) -> list[html.Div]:
@@ -60,7 +65,7 @@ def build_dataset_banner(dataset_slug: str) -> html.Div:
             html.Div(dataset["label"], className="run-banner-title"),
             html.Div(
                 f"Files: {dataset['file_count']} | Groups: {dataset['group_count']} | "
-                f"Pool: {dataset['pooled_files']} | Validation: {dataset['validation_files']}",
+                f"Pool: {dataset['pooled_files']} | Testing: {dataset['validation_files']}",
                 className="run-banner-mode",
             ),
             html.Div(description, className="run-banner-meta"),
@@ -396,7 +401,7 @@ def build_results_context_status(dataset_slug: str, current_run: dict | None = N
 
     dataset_summary = (
         f"Files: {dataset['file_count']} | Groups: {dataset['group_count']} | "
-        f"Pool: {dataset['pooled_files']} | Validation: {dataset['validation_files']}"
+        f"Pool: {dataset['pooled_files']} | Testing: {dataset['validation_files']}"
     )
 
     return html.Div(
@@ -417,7 +422,7 @@ def build_results_banner(dataset_slug: str, current_run: dict | None = None, bun
 
     dataset_summary = (
         f"Files: {dataset['file_count']} | Groups: {dataset['group_count']} | "
-        f"Pool: {dataset['pooled_files']} | Validation: {dataset['validation_files']}"
+        f"Pool: {dataset['pooled_files']} | Testing: {dataset['validation_files']}"
     )
 
     run_text = (current_run or {}).get("run_id") or bundle.get("run_id") or "Saved model bundle selected"
@@ -429,7 +434,7 @@ def build_results_banner(dataset_slug: str, current_run: dict | None = None, bun
     top_row = results[0] if results else None
     if top_row:
         top_text = (
-            f"Best validation accuracy: {top_row['feature_set']} | {top_row['model']} "
+            f"Best testing accuracy: {top_row['feature_set']} | {top_row['model']} "
             f"= {top_row['validation_accuracy']:.4f}"
         )
 
@@ -507,7 +512,7 @@ def build_confusion_grid(bundle: dict) -> list[html.Div]:
                             children=[
                                 html.H3(f"{feature_name} | {model_name}"),
                                 html.P(
-                                    f"Validation: {result_row.get('validation_accuracy', 0):.4f} | "
+                                    f"Testing: {result_row.get('validation_accuracy', 0):.4f} | "
                                     f"Best Params: {result_row.get('best_params', '{}')}"
                                 ),
                             ],
@@ -520,11 +525,11 @@ def build_confusion_grid(bundle: dict) -> list[html.Div]:
                                     config={"displayModeBar": False},
                                 ),
                                 dcc.Graph(
-                                    figure=make_confusion_matrix_figure(matrices["testing"], "Testing Confusion Matrix"),
+                                    figure=make_confusion_matrix_figure(matrices["testing"], "Validation Confusion Matrix"),
                                     config={"displayModeBar": False},
                                 ),
                                 dcc.Graph(
-                                    figure=make_confusion_matrix_figure(matrices["validation"], "Validation Confusion Matrix"),
+                                    figure=make_confusion_matrix_figure(matrices["validation"], "Testing Confusion Matrix"),
                                     config={"displayModeBar": False},
                                 ),
                             ],

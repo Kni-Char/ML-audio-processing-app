@@ -184,7 +184,7 @@ def file_management_tab(default_dataset_slug: str) -> html.Div:
                         children=[
                             html.H2("File Management"),
                             html.P(
-                                "Store train/test audio together in one pooled section, keep independent validation separate, and let the processing tab split the pool at runtime."
+                                "Store training/validation audio together in one pooled section, keep independent testing separate, and let the processing tab split the pool at runtime."
                             ),
                         ],
                     ),
@@ -320,7 +320,7 @@ def processing_tab(default_dataset_slug: str) -> html.Div:
                             html.Div(
                                 children=[
                                     html.H2("Processing"),
-                                    html.P("Control preprocessing, pooled train/test splitting, feature extraction, and model execution."),
+                                    html.P("Control preprocessing, pooled training/validation splitting, feature extraction, and model execution."),
                                 ],
                             ),
                             html.Button("Run Processing Pipeline", id="run-pipeline-btn", n_clicks=0, className="button button-primary"),
@@ -493,10 +493,18 @@ def results_tab(default_dataset_slug: str) -> html.Div:
                         className="panel-heading",
                         children=[
                             html.H2("Signal Preview"),
-                            html.P("Inspect a single recording with waveform, preprocessing, onset detection, and spectrogram views."),
+                            html.P("Inspect a single recording with waveform, preprocessing, onset detection, spectrogram views, and a run-based classification summary."),
                         ],
                     ),
-                    dcc.Dropdown(id="preview-file-dropdown", placeholder="Select a file from the train/test pool or validation"),
+                    dcc.Dropdown(id="preview-file-dropdown", placeholder="Select a file from the training/validation pool or testing section"),
+                    html.Div(id="recording-classification-summary", className="classification-summary-panel"),
+                    dash_table.DataTable(
+                        id="recording-classification-table",
+                        style_table={"overflowX": "auto"},
+                        style_cell={"textAlign": "left", "padding": "10px"},
+                        style_header={"fontWeight": "bold"},
+                        page_size=8,
+                    ),
                     html.Audio(id="preview-audio", controls=True, className="audio-player"),
                     html.Div(id="preview-metadata", className="muted-text"),
                     html.Div(
@@ -517,7 +525,7 @@ def results_tab(default_dataset_slug: str) -> html.Div:
                         className="panel-heading",
                         children=[
                             html.H2("Model Results"),
-                            html.P("Compare derived training/testing performance and independent validation performance across the selected classifiers."),
+                            html.P("Compare derived training/validation performance and independent testing performance across the selected classifiers."),
                         ],
                     ),
                     dcc.Graph(id="accuracy-graph"),
@@ -578,6 +586,7 @@ def create_layout(default_dataset_slug: str) -> html.Div:
         className="app-shell",
         children=[
             dcc.Store(id="current-run-store", data=initial_run_store),
+            dcc.Store(id="latest-recording-file-id", data=None),
             dcc.Store(id="processing-started-at", data=None),
             dcc.Interval(id="processing-timer-interval", interval=1000, n_intervals=0, disabled=True),
             html.Header(
@@ -590,7 +599,7 @@ def create_layout(default_dataset_slug: str) -> html.Div:
                                 className="header-copy",
                                 children=[
                                     html.P("ML Audio Processing App", className="eyebrow"),
-                                    html.H1("Studio-to-Validation Workflow Suite for Experimental impact audio ML classification"),
+                                    html.H1("Studio-to-Testing Workflow Suite for Experimental impact audio ML classification"),
                                 ],
                             ),
                         ],

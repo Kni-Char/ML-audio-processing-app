@@ -551,7 +551,7 @@ def split_pooled_dataset(pooled: dict[str, Any], train_ratio: float) -> dict[str
 
     labels = pooled["labels"]
     if len(labels) < 2:
-        raise ValueError("The train/test pool needs enough single-hit clips to create both training and testing splits.")
+        raise ValueError("The train/validation pool needs enough single-hit clips to create both training and validation splits.")
 
     indices = np.arange(len(labels))
     train_indices, test_indices = train_test_split(
@@ -578,12 +578,12 @@ def prepare_datasets(config: ExperimentConfig, run_id: str, dataset_slug: str) -
 
     if pooled["summary"]["clips"] == 0:
         raise ValueError(
-            "The pooled train/test section did not produce any single-hit clips. "
+            "The pooled train/validation section did not produce any single-hit clips. "
             "Check that files follow the S_1_g / S_1_b naming convention and contain audible impacts."
         )
     if validation["summary"]["clips"] == 0:
         raise ValueError(
-            "The validation section did not produce any single-hit clips. "
+            "The testing section did not produce any single-hit clips. "
             "Check that files follow the S_1_g / S_1_b naming convention and contain audible impacts."
         )
 
@@ -753,6 +753,70 @@ def train_experiment(config: ExperimentConfig, dataset_slug: str) -> dict[str, A
         "section_summary": {
             section: sections[section]["summary"] for section in SECTION_NAMES
         },
+    }
+
+
+def classify_recording_with_run(saved_bundle: dict[str, Any], file_path: Path) -> dict[str, Any]:
+    if "trained_models" not in saved_bundle:
+        raise ValueError("The selected artifact does not contain trained models.")
+
+    results_rows = saved_bundle.get("results_table", [])
+    if not results_rows:
+        raise ValueError("The selected artifact does not contain model results.")
+
+    best_row = results_rows[0]
+    feature_name = best_row["feature_set"]
+    model_name = best_row["model"]
+    estimator = saved_bundle["trained_models"][feature_name][model_name]
+    config = experiment_config_from_dict(saved_bundle["config"])
+
+    processed = process_audio_file(
+        file_path=file_path,
+        preprocessing=config.preprocessing,
+        split_config=config.split,
+        good_hits=config.good_hits,
+        bad_hits=config.bad_hits,
+    )
+    if not processed.clips:
+        raise ValueError("No single-hit clips were extracted from the selected recording.")
+
+    X = build_feature_matrix([(clip, processed.sample_rate) for clip in processed.clips], feature_name)
+    predictions = estimator.predict(X).astype(int)
+    good_votes = int(np.sum(predictions == 0))
+    bad_votes = int(np.sum(predictions == 1))
+
+    if good_votes == bad_votes:
+        predicted_label = None
+    else:
+        predicted_label = 0 if good_votes > bad_votes else 1
+
+    hit_rows = [
+        {
+            "hit_index": index + 1,
+            "prediction": "Good / Healthy" if int(label) == 0 else "Bad / Unhealthy",
+            "prediction_id": int(label),
+        }
+        for index, label in enumerate(predictions.tolist())
+    ]
+
+    return {
+        "feature_set": feature_name,
+        "model": model_name,
+        "validation_accuracy": best_row.get("validation_accuracy"),
+        "predicted_label": predicted_label,
+        "predicted_label_text": (
+            "Good / Healthy"
+            if predicted_label == 0
+            else "Bad / Unhealthy"
+            if predicted_label == 1
+            else "Tie / Mixed vote"
+        ),
+        "source_label": processed.label,
+        "source_label_text": "Good / Healthy" if processed.label == 0 else "Bad / Unhealthy",
+        "good_votes": good_votes,
+        "bad_votes": bad_votes,
+        "found_hits": len(processed.clips),
+        "hit_rows": hit_rows,
     }
 
 

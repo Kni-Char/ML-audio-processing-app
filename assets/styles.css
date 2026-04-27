@@ -138,6 +138,56 @@ label,
   background: rgba(255, 255, 255, 0.62);
 }
 
+.classification-summary-panel {
+  margin-top: 14px;
+  margin-bottom: 14px;
+}
+
+.classification-card {
+  padding: 18px 20px;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(240, 250, 248, 0.92), rgba(255, 255, 255, 0.96));
+}
+
+.classification-card.is-good {
+  border-color: rgba(22, 101, 52, 0.24);
+}
+
+.classification-card.is-bad {
+  border-color: rgba(185, 28, 28, 0.22);
+}
+
+.classification-card.is-mixed {
+  border-color: rgba(37, 99, 235, 0.2);
+}
+
+.classification-eyebrow {
+  margin-bottom: 8px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #35506e;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.classification-title {
+  margin: 0 0 8px;
+  font-family: "Bahnschrift", "Franklin Gothic Medium", "Trebuchet MS", sans-serif;
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.classification-meta,
+.classification-submeta {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.classification-submeta {
+  margin-top: 6px;
+}
+
 .file-manager-shell {
   margin-top: 16px;
   border: 1px solid rgba(29, 34, 46, 0.12);
